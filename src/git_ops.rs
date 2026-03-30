@@ -547,3 +547,90 @@ pub fn push(repo: &Repository) -> Result<String> {
     ))
 }
 
+/// Graph lane assignment for commit visualization
+#[derive(Clone, Debug)]
+pub struct GraphLane {
+    pub lane: usize,
+    pub active_lanes: Vec<bool>,
+    pub merge_from: Option<usize>,
+}
+
+/// Compute graph lane assignments for a list of commits (topological order)
+pub fn compute_graph_lanes(commits: &[CommitInfo]) -> Vec<GraphLane> {
+    let mut lanes: Vec<Option<String>> = Vec::new();
+    let mut result = Vec::new();
+
+    for commit in commits {
+        // Find which lane expects this commit
+        let my_lane = lanes
+            .iter()
+            .position(|l| l.as_deref() == Some(commit.id.as_str()))
+            .unwrap_or_else(|| {
+                if let Some(pos) = lanes.iter().position(|l| l.is_none()) {
+                    pos
+                } else {
+                    lanes.push(None);
+                    lanes.len() - 1
+                }
+            });
+
+        while lanes.len() <= my_lane {
+            lanes.push(None);
+        }
+
+        let mut merge_from = None;
+
+        match commit.parents.len() {
+            0 => {
+                lanes[my_lane] = None;
+            }
+            1 => {
+                lanes[my_lane] = Some(commit.parents[0].clone());
+            }
+            _ => {
+                lanes[my_lane] = Some(commit.parents[0].clone());
+                let parent2 = &commit.parents[1];
+                let p2_lane = lanes
+                    .iter()
+                    .position(|l| l.as_deref() == Some(parent2.as_str()))
+                    .unwrap_or_else(|| {
+                        if let Some(pos) = lanes
+                            .iter()
+                            .enumerate()
+                            .position(|(i, l)| l.is_none() && i != my_lane)
+                        {
+                            lanes[pos] = Some(parent2.clone());
+                            pos
+                        } else {
+                            lanes.push(Some(parent2.clone()));
+                            lanes.len() - 1
+                        }
+                    });
+                merge_from = Some(p2_lane);
+            }
+        }
+
+        let active_lanes = lanes.iter().map(|l| l.is_some()).collect();
+
+        result.push(GraphLane {
+            lane: my_lane,
+            active_lanes,
+            merge_from,
+        });
+
+        while lanes.last() == Some(&None) {
+            lanes.pop();
+        }
+    }
+
+    result
+}
+
+/// Get the current branch name
+pub fn get_current_branch(repo: &Repository) -> String {
+    repo.head()
+        .ok()
+        .and_then(|h| h.shorthand().map(|s| s.to_string()))
+        .unwrap_or_else(|| "detached".to_string())
+}
+

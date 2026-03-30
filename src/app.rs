@@ -1,4 +1,4 @@
-use crate::git_ops::{self, BranchInfo, CommitInfo, FileStatus, RemoteStatus};
+use crate::git_ops::{self, BranchInfo, CommitInfo, FileStatus, GraphLane, RemoteStatus};
 use anyhow::Result;
 use git2::Repository;
 use ratatui::layout::Rect;
@@ -12,10 +12,6 @@ pub enum Tab {
 }
 
 impl Tab {
-    pub fn titles() -> &'static [&'static str] {
-        &["[1] Graph", "[2] Files", "[3] Branches"]
-    }
-
     pub fn index(&self) -> usize {
         match self {
             Tab::Graph => 0,
@@ -69,6 +65,8 @@ pub struct App {
     pub commits: Vec<CommitInfo>,
     pub commit_scroll: usize,
     pub commit_selected: usize,
+    pub graph_lanes: Vec<GraphLane>,
+    pub current_branch: String,
 
     // Files tab
     pub staged_files: Vec<FileStatus>,
@@ -116,6 +114,7 @@ pub enum ClickAction {
     UnstageAllButton,
     CommitButton,
     NewBranchButton,
+    FetchButton,
 }
 
 impl App {
@@ -131,6 +130,8 @@ impl App {
             commits: Vec::new(),
             commit_scroll: 0,
             commit_selected: 0,
+            graph_lanes: Vec::new(),
+            current_branch: String::new(),
             staged_files: Vec::new(),
             unstaged_files: Vec::new(),
             file_pane: FilePane::Unstaged,
@@ -156,11 +157,13 @@ impl App {
         self.refresh_files()?;
         self.refresh_branches()?;
         self.refresh_remote_status();
+        self.current_branch = git_ops::get_current_branch(&self.repo);
         Ok(())
     }
 
     pub fn refresh_commits(&mut self) -> Result<()> {
         self.commits = git_ops::get_commits(&self.repo, 200)?;
+        self.graph_lanes = git_ops::compute_graph_lanes(&self.commits);
         if self.commit_selected >= self.commits.len() {
             self.commit_selected = self.commits.len().saturating_sub(1);
         }
@@ -362,6 +365,7 @@ impl App {
             ClickAction::UnstageAllButton => self.unstage_all(),
             ClickAction::CommitButton => self.do_commit(),
             ClickAction::NewBranchButton => self.start_new_branch(),
+            ClickAction::FetchButton => self.do_fetch(),
         }
     }
 

@@ -6,58 +6,167 @@ use ratatui::{
     text::{Line, Span},
     widgets::{
         Block, Borders, Clear, List, ListItem, Paragraph, Scrollbar, ScrollbarOrientation,
-        ScrollbarState, Tabs, Wrap,
+        ScrollbarState, Wrap,
     },
     Frame,
 };
 
-/// Colors used throughout the UI
+// ── Dark purple/violet theme ───────────────────────────────
+
 mod colors {
     use ratatui::style::Color;
-    pub const ACCENT: Color = Color::Cyan;
-    pub const BRANCH: Color = Color::Green;
-    pub const HEAD: Color = Color::Yellow;
-    pub const REMOTE: Color = Color::Red;
-    pub const ADDED: Color = Color::Green;
-    pub const MODIFIED: Color = Color::Yellow;
-    pub const DELETED: Color = Color::Red;
-    pub const CONFLICT: Color = Color::Magenta;
-    pub const PUSH: Color = Color::Green;
-    pub const PULL: Color = Color::Cyan;
-    pub const GRAPH_COLORS: [Color; 6] = [
-        Color::Cyan,
-        Color::Green,
-        Color::Magenta,
-        Color::Yellow,
-        Color::Blue,
-        Color::Red,
-    ];
+
+    // Backgrounds
+    pub const BG: Color = Color::Rgb(10, 7, 20);
+    pub const BG_PANEL: Color = Color::Rgb(15, 11, 30);
+    pub const BG_SURFACE: Color = Color::Rgb(20, 15, 40);
+    pub const BG_SELECT: Color = Color::Rgb(45, 30, 75);
+    pub const BG_TITLE: Color = Color::Rgb(19, 14, 40);
+    pub const BG_TAB: Color = Color::Rgb(12, 8, 25);
+    pub const BG_STATUS: Color = Color::Rgb(8, 6, 20);
+
+    // Borders
+    pub const BORDER: Color = Color::Rgb(28, 20, 53);
+    pub const BORDER_FOCUS: Color = Color::Rgb(124, 58, 237);
+
+    // Text
+    pub const TEXT: Color = Color::Rgb(224, 218, 244);
+    pub const TEXT_SECONDARY: Color = Color::Rgb(155, 143, 192);
+    pub const TEXT_MUTED: Color = Color::Rgb(90, 77, 128);
+    pub const TEXT_DIM: Color = Color::Rgb(58, 46, 92);
+
+    // Accent (violet)
+    pub const ACCENT: Color = Color::Rgb(167, 139, 250);
+    pub const ACCENT_BRIGHT: Color = Color::Rgb(196, 181, 253);
+    pub const ACCENT_GLOW: Color = Color::Rgb(139, 92, 246);
+
+    // Semantic
+    pub const GREEN: Color = Color::Rgb(134, 239, 172);
+    pub const YELLOW: Color = Color::Rgb(253, 230, 138);
+    pub const RED: Color = Color::Rgb(252, 165, 165);
+    pub const CYAN: Color = Color::Rgb(165, 243, 252);
+    pub const PINK: Color = Color::Rgb(249, 168, 212);
+    pub const ORANGE: Color = Color::Rgb(253, 186, 116);
+
+    // Badge backgrounds (pre-blended with dark bg)
+    pub const GREEN_BG: Color = Color::Rgb(18, 32, 25);
+    pub const YELLOW_BG: Color = Color::Rgb(35, 30, 18);
+    pub const ACCENT_BG: Color = Color::Rgb(22, 16, 42);
+
+    // Graph lane colors
+    pub const GRAPH_COLORS: [Color; 6] = [ACCENT, CYAN, PINK, ORANGE, GREEN, YELLOW];
 }
 
-/// Main draw function — delegates to tab-specific renderers
+// ── Helpers ────────────────────────────────────────────────
+
+fn relative_time(timestamp: i64) -> String {
+    let now = chrono::Utc::now().timestamp();
+    let diff = now - timestamp;
+    if diff < 0 {
+        return "just now".to_string();
+    }
+    let diff = diff as u64;
+    match diff {
+        0..=59 => "just now".to_string(),
+        60..=3599 => format!("{} min ago", diff / 60),
+        3600..=86399 => {
+            let h = diff / 3600;
+            format!("{} hr{} ago", h, if h == 1 { "" } else { "s" })
+        }
+        86400..=604799 => {
+            let d = diff / 86400;
+            format!("{} day{} ago", d, if d == 1 { "" } else { "s" })
+        }
+        _ => {
+            let w = diff / 604800;
+            format!("{} wk{} ago", w, if w == 1 { "" } else { "s" })
+        }
+    }
+}
+
+fn inner_rect(area: Rect) -> Rect {
+    Rect::new(
+        area.x + 1,
+        area.y + 1,
+        area.width.saturating_sub(2),
+        area.height.saturating_sub(2),
+    )
+}
+
+fn centered_rect(percent_x: u16, height: u16, r: Rect) -> Rect {
+    let popup_layout = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length((r.height.saturating_sub(height)) / 2),
+            Constraint::Length(height),
+            Constraint::Min(0),
+        ])
+        .split(r);
+
+    Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Percentage((100 - percent_x) / 2),
+            Constraint::Percentage(percent_x),
+            Constraint::Percentage((100 - percent_x) / 2),
+        ])
+        .split(popup_layout[1])[1]
+}
+
+fn styled_block<'a>(title: &str, focused: bool) -> Block<'a> {
+    let border_color = if focused {
+        colors::BORDER_FOCUS
+    } else {
+        colors::BORDER
+    };
+    let header_fg = if focused {
+        colors::ACCENT_BRIGHT
+    } else {
+        colors::TEXT_MUTED
+    };
+    Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(border_color))
+        .title(Span::styled(
+            format!(" {} ", title),
+            Style::default()
+                .fg(header_fg)
+                .add_modifier(Modifier::BOLD),
+        ))
+        .style(Style::default().bg(colors::BG_PANEL))
+}
+
+// ── Main draw ──────────────────────────────────────────────
+
 pub fn draw(f: &mut Frame, app: &mut App) {
     app.clear_click_regions();
+
+    // Fill entire background
+    let bg = Block::default().style(Style::default().bg(colors::BG));
+    f.render_widget(bg, f.area());
 
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(3), // tab bar
-            Constraint::Min(0),   // main content
+            Constraint::Length(1), // title bar
+            Constraint::Length(1), // tab bar
+            Constraint::Min(0),   // content
             Constraint::Length(1), // status bar
         ])
         .split(f.area());
 
-    draw_tabs(f, app, chunks[0]);
+    draw_title_bar(f, app, chunks[0]);
+    draw_tab_bar(f, app, chunks[1]);
 
     match app.tab {
-        Tab::Graph => draw_graph_tab(f, app, chunks[1]),
-        Tab::Files => draw_files_tab(f, app, chunks[1]),
-        Tab::Branches => draw_branches_tab(f, app, chunks[1]),
+        Tab::Graph => draw_graph_tab(f, app, chunks[2]),
+        Tab::Files => draw_files_tab(f, app, chunks[2]),
+        Tab::Branches => draw_branches_tab(f, app, chunks[2]),
     }
 
-    draw_status_bar(f, app, chunks[2]);
+    draw_status_bar(f, app, chunks[3]);
 
-    // Draw popups on top
+    // Popups on top
     match &app.popup {
         Popup::NewBranch => {
             draw_input_popup(f, "New Branch", "Enter branch name:", &app.input_buffer)
@@ -67,74 +176,167 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         }
         Popup::ConfirmPush => {
             let msg = format!(
-                "Push to {}? (y/n)\n↑ {} commit(s) ahead",
+                "Push to {}?\n\n  ↑ {} commit(s) ahead\n\n  [Y] Confirm    [N] Cancel",
                 app.remote_status
                     .remote_name
                     .as_deref()
                     .unwrap_or("remote"),
                 app.remote_status.ahead
             );
-            draw_confirm_popup(f, "Push", &msg)
+            draw_confirm_popup(f, "↑ Push", &msg)
         }
         Popup::ConfirmPull => {
             let msg = format!(
-                "Pull from {}? (y/n)\n↓ {} commit(s) behind",
+                "Pull from {}?\n\n  ↓ {} commit(s) behind\n\n  [Y] Confirm    [N] Cancel",
                 app.remote_status
                     .remote_name
                     .as_deref()
                     .unwrap_or("remote"),
                 app.remote_status.behind
             );
-            draw_confirm_popup(f, "Pull", &msg)
+            draw_confirm_popup(f, "↓ Pull", &msg)
         }
         Popup::Help => draw_help_popup(f),
         Popup::None => {}
     }
 }
 
-fn draw_tabs(f: &mut Frame, app: &mut App, area: Rect) {
+// ── Title Bar ──────────────────────────────────────────────
+
+fn draw_title_bar(f: &mut Frame, app: &mut App, area: Rect) {
+    let branch = &app.current_branch;
     let ahead = app.remote_status.ahead;
     let behind = app.remote_status.behind;
-    let remote_str = format!(" ↑{} ↓{} │ [P]ush [L]ull [F]etch ", ahead, behind);
-    let title = format!(" Git Lumina │{}", remote_str);
 
-    let titles: Vec<Line> = Tab::titles().iter().map(|t| Line::from(*t)).collect();
-    let tabs = Tabs::new(titles)
-        .block(Block::default().borders(Borders::ALL).title(title))
-        .select(app.tab.index())
-        .style(Style::default().fg(Color::White))
-        .highlight_style(
-            Style::default()
-                .fg(colors::ACCENT)
-                .add_modifier(Modifier::BOLD),
-        );
-    f.render_widget(tabs, area);
+    let left: Vec<Span> = vec![
+        Span::styled(" ⎇ ", Style::default().fg(colors::ACCENT_BRIGHT).add_modifier(Modifier::BOLD)),
+        Span::styled("Git", Style::default().fg(colors::TEXT).add_modifier(Modifier::BOLD)),
+        Span::styled("Lumina", Style::default().fg(colors::ACCENT).add_modifier(Modifier::BOLD)),
+        Span::styled("  ", Style::default()),
+        Span::styled("● ", Style::default().fg(colors::ACCENT_GLOW)),
+        Span::styled(branch.as_str(), Style::default().fg(colors::TEXT)),
+    ];
 
-    // Register tab click regions
-    let tab_width = area.width / 3;
-    for (i, tab) in [Tab::Graph, Tab::Files, Tab::Branches].iter().enumerate() {
-        let r = Rect::new(area.x + 1 + (i as u16 * tab_width), area.y + 1, tab_width, 1);
-        app.register_click_region(r, ClickAction::SelectTab(*tab));
-    }
+    let right: Vec<Span> = vec![
+        Span::styled(format!("↑{}", ahead), Style::default().fg(colors::GREEN).add_modifier(Modifier::BOLD)),
+        Span::styled(" Push ", Style::default().fg(colors::TEXT_MUTED)),
+        Span::styled(format!("↓{}", behind), Style::default().fg(colors::CYAN).add_modifier(Modifier::BOLD)),
+        Span::styled(" Pull ", Style::default().fg(colors::TEXT_MUTED)),
+        Span::styled("⟳", Style::default().fg(colors::ACCENT)),
+        Span::styled(" Fetch ", Style::default().fg(colors::TEXT_MUTED)),
+    ];
+
+    let left_width: usize = left.iter().map(|s| s.content.len()).sum();
+    let right_width: usize = right.iter().map(|s| s.content.len()).sum();
+    let pad = (area.width as usize).saturating_sub(left_width + right_width);
+
+    let mut spans = left;
+    spans.push(Span::raw(" ".repeat(pad)));
+    spans.extend(right);
+
+    let bar = Paragraph::new(Line::from(spans))
+        .style(Style::default().bg(colors::BG_TITLE));
+    f.render_widget(bar, area);
+
+    // Click regions for Push, Pull, Fetch buttons
+    let push_x = area.x + area.width.saturating_sub(right_width as u16);
+    app.register_click_region(
+        Rect::new(push_x, area.y, 7, 1),
+        ClickAction::PushButton,
+    );
+    app.register_click_region(
+        Rect::new(push_x + 7, area.y, 7, 1),
+        ClickAction::PullButton,
+    );
+    app.register_click_region(
+        Rect::new(push_x + 14, area.y, 8, 1),
+        ClickAction::FetchButton,
+    );
 }
 
-fn draw_status_bar(f: &mut Frame, app: &App, area: Rect) {
-    let hint = match app.input_mode {
-        InputMode::Editing => " ESC: cancel │ Enter: confirm",
-        InputMode::Normal => {
-            " ?: help │ q: quit │ Tab/↑↓: nav │ P: push │ L: pull │ F: fetch │ Mouse: click/scroll"
+// ── Tab Bar ────────────────────────────────────────────────
+
+fn draw_tab_bar(f: &mut Frame, app: &mut App, area: Rect) {
+    let tab_names = ["1 Graph", "2 Files", "3 Branches"];
+    let mut spans: Vec<Span> = Vec::new();
+    spans.push(Span::raw(" "));
+
+    for (i, name) in tab_names.iter().enumerate() {
+        let is_active = app.tab.index() == i;
+        if is_active {
+            spans.push(Span::styled(
+                format!(" {} ", name),
+                Style::default()
+                    .fg(colors::ACCENT_BRIGHT)
+                    .bg(colors::BG_SURFACE)
+                    .add_modifier(Modifier::BOLD),
+            ));
+        } else {
+            spans.push(Span::styled(
+                format!(" {} ", name),
+                Style::default().fg(colors::TEXT_MUTED),
+            ));
         }
+        spans.push(Span::raw("  "));
+    }
+
+    // Right side: Refresh button
+    let used: usize = spans.iter().map(|s| s.content.len()).sum();
+    let refresh_text = "⟳ Refresh ";
+    let pad = (area.width as usize).saturating_sub(used + refresh_text.len());
+    spans.push(Span::raw(" ".repeat(pad)));
+    spans.push(Span::styled(refresh_text, Style::default().fg(colors::TEXT_MUTED)));
+
+    let bar = Paragraph::new(Line::from(spans))
+        .style(Style::default().bg(colors::BG_TAB));
+    f.render_widget(bar, area);
+
+    // Tab click regions
+    let mut x = area.x + 1;
+    for (i, name) in tab_names.iter().enumerate() {
+        let w = name.len() as u16 + 2; // padding
+        let tab = match i {
+            0 => Tab::Graph,
+            1 => Tab::Files,
+            _ => Tab::Branches,
+        };
+        app.register_click_region(Rect::new(x, area.y, w, 1), ClickAction::SelectTab(tab));
+        x += w + 2;
+    }
+
+    // Refresh click region
+    app.register_click_region(
+        Rect::new(area.x + area.width - refresh_text.len() as u16, area.y, refresh_text.len() as u16, 1),
+        ClickAction::RefreshButton,
+    );
+}
+
+// ── Status Bar ─────────────────────────────────────────────
+
+fn draw_status_bar(f: &mut Frame, app: &App, area: Rect) {
+    let hints = match app.input_mode {
+        InputMode::Editing => "ESC cancel │ Enter confirm",
+        InputMode::Normal => "? help │ q quit │ P push │ L pull │ F fetch │ ↑↓ nav",
     };
-    let status = if app.status_msg.is_empty() {
-        hint.to_string()
+
+    let left = if app.status_msg.is_empty() {
+        Span::styled(" Ready", Style::default().fg(colors::TEXT_MUTED))
     } else {
-        format!(" {} │{}", app.status_msg, hint)
+        Span::styled(format!(" {}", app.status_msg), Style::default().fg(colors::ACCENT_BRIGHT))
     };
-    let bar = Paragraph::new(status).style(Style::default().bg(Color::DarkGray).fg(Color::White));
+
+    let right = Span::styled(format!("{} ", hints), Style::default().fg(colors::TEXT_DIM));
+
+    let left_w = left.content.len();
+    let right_w = right.content.len();
+    let pad = (area.width as usize).saturating_sub(left_w + right_w);
+
+    let line = Line::from(vec![left, Span::raw(" ".repeat(pad)), right]);
+    let bar = Paragraph::new(line).style(Style::default().bg(colors::BG_STATUS));
     f.render_widget(bar, area);
 }
 
-// ── Graph Tab ───────────────────────────────────────────
+// ── Graph Tab ──────────────────────────────────────────────
 
 fn draw_graph_tab(f: &mut Frame, app: &mut App, area: Rect) {
     let chunks = Layout::default()
@@ -147,71 +349,144 @@ fn draw_graph_tab(f: &mut Frame, app: &mut App, area: Rect) {
 }
 
 fn draw_commit_list(f: &mut Frame, app: &mut App, area: Rect) {
+    let max_lanes = app
+        .graph_lanes
+        .iter()
+        .map(|g| g.active_lanes.len().max(g.lane + 1))
+        .max()
+        .unwrap_or(1)
+        .min(6); // cap at 6 lanes for display
+
     let items: Vec<ListItem> = app
         .commits
         .iter()
         .enumerate()
         .map(|(i, commit)| {
-            let graph_char = if commit.parents.len() > 1 {
-                "●─┐"
-            } else {
-                "● "
-            };
-            let color_idx = i % colors::GRAPH_COLORS.len();
-            let graph_color = colors::GRAPH_COLORS[color_idx];
+            let sel = i == app.commit_selected;
+            let lane_info = app.graph_lanes.get(i);
 
-            let branch_spans: Vec<Span> = commit
-                .branches
-                .iter()
-                .map(|b| {
-                    Span::styled(
-                        format!(" [{}]", b),
-                        Style::default()
-                            .fg(if commit.is_head {
-                                colors::HEAD
+            // Build graph prefix
+            let mut graph_spans: Vec<Span> = Vec::new();
+            if let Some(info) = lane_info {
+                let my_lane = info.lane.min(max_lanes - 1);
+                let merge_to = info.merge_from.map(|m| m.min(max_lanes - 1));
+
+                for col in 0..max_lanes {
+                    let col_color = colors::GRAPH_COLORS[col % colors::GRAPH_COLORS.len()];
+                    let my_color = colors::GRAPH_COLORS[my_lane % colors::GRAPH_COLORS.len()];
+                    let is_active = col < info.active_lanes.len() && info.active_lanes[col];
+
+                    if col == my_lane {
+                        if let Some(mt) = merge_to {
+                            if mt > my_lane {
+                                graph_spans.push(Span::styled(
+                                    "●─",
+                                    Style::default().fg(my_color),
+                                ));
                             } else {
-                                colors::BRANCH
-                            })
-                            .add_modifier(Modifier::BOLD),
-                    )
-                })
-                .collect();
+                                graph_spans.push(Span::styled(
+                                    "● ",
+                                    Style::default().fg(my_color),
+                                ));
+                            }
+                        } else {
+                            let node = if sel { "◉ " } else { "● " };
+                            graph_spans.push(Span::styled(
+                                node,
+                                Style::default().fg(my_color),
+                            ));
+                        }
+                    } else if let Some(mt) = merge_to {
+                        if col > my_lane && col < mt {
+                            graph_spans.push(Span::styled(
+                                "──",
+                                Style::default().fg(colors::GRAPH_COLORS[my_lane % colors::GRAPH_COLORS.len()]),
+                            ));
+                        } else if col == mt {
+                            graph_spans.push(Span::styled(
+                                "┐ ",
+                                Style::default().fg(col_color),
+                            ));
+                        } else if is_active {
+                            graph_spans.push(Span::styled(
+                                "│ ",
+                                Style::default().fg(col_color).add_modifier(Modifier::DIM),
+                            ));
+                        } else {
+                            graph_spans.push(Span::raw("  "));
+                        }
+                    } else if is_active {
+                        graph_spans.push(Span::styled(
+                            "│ ",
+                            Style::default().fg(col_color).add_modifier(Modifier::DIM),
+                        ));
+                    } else {
+                        graph_spans.push(Span::raw("  "));
+                    }
+                }
+            } else {
+                graph_spans.push(Span::styled("● ", Style::default().fg(colors::ACCENT)));
+                for _ in 1..max_lanes {
+                    graph_spans.push(Span::raw("  "));
+                }
+            }
 
-            let mut spans = vec![
-                Span::styled(graph_char, Style::default().fg(graph_color)),
-                Span::styled(
-                    format!(" {} ", commit.id),
-                    Style::default()
-                        .fg(Color::DarkGray)
-                        .add_modifier(Modifier::DIM),
-                ),
-            ];
-            spans.extend(branch_spans);
-            spans.push(Span::styled(
-                format!(" {}", commit.message),
-                Style::default().fg(Color::White),
+            // SHA
+            let sha_color = if sel { colors::ACCENT } else { colors::TEXT_DIM };
+            graph_spans.push(Span::styled(
+                format!("{} ", commit.id),
+                Style::default().fg(sha_color),
             ));
 
-            let style = if i == app.commit_selected {
-                Style::default()
-                    .bg(Color::DarkGray)
-                    .add_modifier(Modifier::BOLD)
+            // Branch badges
+            for b in &commit.branches {
+                let is_origin = b.starts_with("origin/");
+                let (fg, bg) = if commit.is_head {
+                    (colors::YELLOW, colors::YELLOW_BG)
+                } else if is_origin {
+                    (colors::ACCENT_BRIGHT, colors::ACCENT_BG)
+                } else {
+                    (colors::GREEN, colors::GREEN_BG)
+                };
+                let prefix = if commit.is_head { "● " } else { "" };
+                graph_spans.push(Span::styled(
+                    format!(" {}{} ", prefix, b),
+                    Style::default().fg(fg).bg(bg).add_modifier(Modifier::BOLD),
+                ));
+                graph_spans.push(Span::raw(" "));
+            }
+
+            // Commit message
+            let msg_color = if sel { colors::TEXT } else { colors::TEXT_SECONDARY };
+            graph_spans.push(Span::styled(
+                &commit.message,
+                Style::default().fg(msg_color),
+            ));
+
+            // Right side: author · time
+            let time_str = relative_time(commit.time);
+            let author_short = commit.author.split(' ').next().unwrap_or(&commit.author);
+            graph_spans.push(Span::styled(
+                format!("  {} · {}", author_short, time_str),
+                Style::default().fg(colors::TEXT_DIM),
+            ));
+
+            let row_style = if sel {
+                Style::default().bg(colors::BG_SELECT)
             } else {
                 Style::default()
             };
 
-            ListItem::new(Line::from(spans)).style(style)
+            ListItem::new(Line::from(graph_spans)).style(row_style)
         })
         .collect();
 
-    let list = List::new(items).block(
-        Block::default()
-            .borders(Borders::ALL)
-            .title(" Commit Graph "),
-    );
+    let title = format!("Commit Graph ({})", app.commits.len());
+    let block = styled_block(&title, true);
+    let list = List::new(items).block(block);
     f.render_widget(list, area);
 
-    // Register click regions for visible commit rows
+    // Click regions
     let inner = inner_rect(area);
     for i in 0..app.commits.len().min(inner.height as usize) {
         let row = Rect::new(inner.x, inner.y + i as u16, inner.width, 1);
@@ -223,35 +498,99 @@ fn draw_commit_list(f: &mut Frame, app: &mut App, area: Rect) {
 }
 
 fn draw_commit_detail(f: &mut Frame, app: &App, area: Rect) {
-    let detail = if let Some(commit) = app.commits.get(app.commit_selected) {
+    let block = styled_block("Details", false);
+
+    if let Some(commit) = app.commits.get(app.commit_selected) {
         let time_str = chrono::DateTime::from_timestamp(commit.time, 0)
             .map(|dt| dt.format("%Y-%m-%d %H:%M").to_string())
             .unwrap_or_else(|| "unknown".to_string());
+        let rel = relative_time(commit.time);
 
-        let branches_str = if commit.branches.is_empty() {
-            String::new()
-        } else {
-            format!("\nBranches: {}", commit.branches.join(", "))
-        };
+        let mut lines: Vec<Line> = Vec::new();
 
-        format!(
-            "Commit: {}\nAuthor: {}\nDate:   {}\n{}\n\n{}",
-            commit.id_full, commit.author, time_str, branches_str, commit.message
-        )
+        // Commit
+        lines.push(Line::from(Span::styled(
+            "COMMIT",
+            Style::default().fg(colors::TEXT_DIM).add_modifier(Modifier::BOLD),
+        )));
+        lines.push(Line::from(Span::styled(
+            format!("  {}", commit.id_full),
+            Style::default().fg(colors::TEXT),
+        )));
+        lines.push(Line::raw(""));
+
+        // Author
+        lines.push(Line::from(Span::styled(
+            "AUTHOR",
+            Style::default().fg(colors::TEXT_DIM).add_modifier(Modifier::BOLD),
+        )));
+        lines.push(Line::from(Span::styled(
+            format!("  {}", commit.author),
+            Style::default().fg(colors::TEXT),
+        )));
+        lines.push(Line::raw(""));
+
+        // Date
+        lines.push(Line::from(Span::styled(
+            "DATE",
+            Style::default().fg(colors::TEXT_DIM).add_modifier(Modifier::BOLD),
+        )));
+        lines.push(Line::from(Span::styled(
+            format!("  {} ({})", time_str, rel),
+            Style::default().fg(colors::TEXT),
+        )));
+        lines.push(Line::raw(""));
+
+        // Branches
+        if !commit.branches.is_empty() {
+            lines.push(Line::from(Span::styled(
+                "BRANCHES",
+                Style::default().fg(colors::TEXT_DIM).add_modifier(Modifier::BOLD),
+            )));
+            let badge_spans: Vec<Span> = std::iter::once(Span::raw("  "))
+                .chain(commit.branches.iter().flat_map(|b| {
+                    let is_origin = b.starts_with("origin/");
+                    let (fg, bg) = if is_origin {
+                        (colors::ACCENT_BRIGHT, colors::ACCENT_BG)
+                    } else {
+                        (colors::GREEN, colors::GREEN_BG)
+                    };
+                    vec![
+                        Span::styled(
+                            format!(" {} ", b),
+                            Style::default().fg(fg).bg(bg),
+                        ),
+                        Span::raw(" "),
+                    ]
+                }))
+                .collect();
+            lines.push(Line::from(badge_spans));
+            lines.push(Line::raw(""));
+        }
+
+        // Message
+        lines.push(Line::from(Span::styled(
+            "MESSAGE",
+            Style::default().fg(colors::TEXT_DIM).add_modifier(Modifier::BOLD),
+        )));
+        lines.push(Line::from(Span::styled(
+            format!("  {}", commit.message),
+            Style::default().fg(colors::TEXT).add_modifier(Modifier::BOLD),
+        )));
+
+        let paragraph = Paragraph::new(lines).block(block).wrap(Wrap { trim: false });
+        f.render_widget(paragraph, area);
     } else {
-        "No commit selected".to_string()
-    };
-
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .title(" Details ");
-    let paragraph = Paragraph::new(detail)
-        .block(block)
-        .wrap(Wrap { trim: false });
-    f.render_widget(paragraph, area);
+        let paragraph = Paragraph::new(Span::styled(
+            "  No commit selected",
+            Style::default().fg(colors::TEXT_MUTED),
+        ))
+        .block(block);
+        f.render_widget(paragraph, area);
+    }
 }
 
-// ── Files Tab ───────────────────────────────────────────
+// ── Files Tab ──────────────────────────────────────────────
 
 fn draw_files_tab(f: &mut Frame, app: &mut App, area: Rect) {
     let main_chunks = Layout::default()
@@ -262,9 +601,9 @@ fn draw_files_tab(f: &mut Frame, app: &mut App, area: Rect) {
     let left_chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Percentage(40),
-            Constraint::Percentage(40),
-            Constraint::Length(5),
+            Constraint::Percentage(38),
+            Constraint::Percentage(38),
+            Constraint::Length(6),
         ])
         .split(main_chunks[0]);
 
@@ -307,50 +646,67 @@ fn draw_file_list(
         .enumerate()
         .map(|(i, file)| {
             let (icon, color) = match file.status {
-                FileState::New => ("+", colors::ADDED),
-                FileState::Modified => ("~", colors::MODIFIED),
-                FileState::Deleted => ("-", colors::DELETED),
-                FileState::Renamed => ("→", colors::MODIFIED),
-                FileState::Typechange => ("T", colors::MODIFIED),
-                FileState::Conflicted => ("!", colors::CONFLICT),
+                FileState::New => ("+", colors::GREEN),
+                FileState::Modified => ("~", colors::YELLOW),
+                FileState::Deleted => ("-", colors::RED),
+                FileState::Renamed => ("→", colors::YELLOW),
+                FileState::Typechange => ("T", colors::YELLOW),
+                FileState::Conflicted => ("!", colors::PINK),
             };
 
             let style = if i == selected && focused {
-                Style::default()
-                    .bg(Color::DarkGray)
-                    .add_modifier(Modifier::BOLD)
+                Style::default().bg(colors::BG_SELECT)
             } else {
                 Style::default()
             };
 
             ListItem::new(Line::from(vec![
-                Span::styled(format!(" {} ", icon), Style::default().fg(color)),
-                Span::styled(&file.path, Style::default().fg(Color::White)),
+                Span::styled(
+                    format!(" {} ", icon),
+                    Style::default().fg(color).add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    &file.path,
+                    Style::default().fg(if i == selected && focused {
+                        colors::TEXT
+                    } else {
+                        colors::TEXT_SECONDARY
+                    }),
+                ),
             ]))
             .style(style)
         })
         .collect();
 
-    let border_style = if focused {
-        Style::default().fg(colors::ACCENT)
-    } else {
-        Style::default()
-    };
+    let btn_label = if is_staged { "Unstage All ↑" } else { "Stage All ↓" };
+    let btn_color = if is_staged { colors::YELLOW } else { colors::GREEN };
+    let header = format!("{} ({})", title, files.len());
 
-    let action_hint = if is_staged {
-        " S-all/u"
-    } else {
-        " s/S-all"
-    };
     let block = Block::default()
         .borders(Borders::ALL)
-        .border_style(border_style)
-        .title(format!(" {} ({}) {} ", title, files.len(), action_hint));
+        .border_style(Style::default().fg(if focused {
+            colors::BORDER_FOCUS
+        } else {
+            colors::BORDER
+        }))
+        .title(Line::from(vec![
+            Span::styled(
+                format!(" {} ", header),
+                Style::default()
+                    .fg(if focused { colors::ACCENT_BRIGHT } else { colors::TEXT_MUTED })
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ]))
+        .title_bottom(Line::from(Span::styled(
+            format!(" {} ", btn_label),
+            Style::default().fg(btn_color),
+        )))
+        .style(Style::default().bg(colors::BG_PANEL));
 
     let list = List::new(items).block(block);
     f.render_widget(list, area);
 
-    // Register click regions
+    // Click regions for file items
     let inner = inner_rect(area);
     for i in 0..files.len().min(inner.height as usize) {
         let row = Rect::new(inner.x, inner.y + i as u16, inner.width, 1);
@@ -361,45 +717,81 @@ fn draw_file_list(
         };
         click_regions.push(ClickRegion { rect: row, action });
     }
+
+    // Click region for bottom button
+    let btn_action = if is_staged {
+        ClickAction::UnstageAllButton
+    } else {
+        ClickAction::StageAllButton
+    };
+    click_regions.push(ClickRegion {
+        rect: Rect::new(area.x, area.y + area.height - 1, area.width, 1),
+        action: btn_action,
+    });
 }
 
 fn draw_commit_input(f: &mut Frame, app: &mut App, area: Rect) {
     let focused = app.file_pane == FilePane::CommitMsg;
-    let border_style = if focused {
-        Style::default().fg(colors::ACCENT)
-    } else {
-        Style::default()
-    };
-
-    let hint = if app.staged_files.is_empty() {
-        " (nothing staged)"
-    } else if focused && app.input_mode == InputMode::Editing {
-        " (Enter: commit, Esc: cancel)"
-    } else {
-        " ('c' to type)"
-    };
 
     let block = Block::default()
         .borders(Borders::ALL)
-        .border_style(border_style)
-        .title(format!(" Commit Message{} ", hint));
+        .border_style(Style::default().fg(if focused {
+            colors::BORDER_FOCUS
+        } else {
+            colors::BORDER
+        }))
+        .title(Span::styled(
+            " Commit Message ",
+            Style::default()
+                .fg(if focused { colors::ACCENT_BRIGHT } else { colors::TEXT_MUTED })
+                .add_modifier(Modifier::BOLD),
+        ))
+        .style(Style::default().bg(colors::BG_PANEL));
 
     let display_text = if app.commit_message.is_empty() && !focused {
-        "Type a commit message...".to_string()
+        "Write a commit message..."
     } else {
-        app.commit_message.clone()
+        &app.commit_message
     };
 
-    let style = if app.commit_message.is_empty() && !focused {
-        Style::default().fg(Color::DarkGray)
+    let text_style = if app.commit_message.is_empty() && !focused {
+        Style::default().fg(colors::TEXT_DIM)
     } else {
-        Style::default().fg(Color::White)
+        Style::default().fg(colors::TEXT)
     };
 
-    let paragraph = Paragraph::new(display_text).style(style).block(block);
+    // Build content: message + button
+    let n = app.staged_files.len();
+    let can_commit = n > 0 && !app.commit_message.is_empty();
+    let btn_text = format!(" Commit {} file{} ", n, if n == 1 { "" } else { "s" });
+    let btn_style = if can_commit {
+        Style::default()
+            .fg(colors::TEXT)
+            .bg(colors::ACCENT_GLOW)
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(colors::TEXT_DIM).bg(colors::BG_SURFACE)
+    };
+
+    let lines = vec![
+        Line::from(Span::styled(display_text, text_style)),
+        Line::raw(""),
+        Line::from(Span::styled(btn_text, btn_style)),
+    ];
+
+    let paragraph = Paragraph::new(lines).block(block);
     f.render_widget(paragraph, area);
 
     app.register_click_region(area, ClickAction::FocusCommitMsg);
+
+    // Click region for the commit button (last line of inner area)
+    let inner = inner_rect(area);
+    if inner.height >= 3 {
+        app.register_click_region(
+            Rect::new(inner.x, inner.y + 2, inner.width, 1),
+            ClickAction::CommitButton,
+        );
+    }
 
     if focused && app.input_mode == InputMode::Editing {
         let x = area.x + 1 + app.commit_message.len() as u16;
@@ -413,16 +805,16 @@ fn draw_diff_view(f: &mut Frame, app: &mut App, area: Rect) {
         .diff_text
         .lines()
         .map(|line| {
-            let style = if line.starts_with('+') {
-                Style::default().fg(colors::ADDED)
+            let (fg, bg) = if line.starts_with('+') {
+                (colors::GREEN, Color::Rgb(15, 25, 18))
             } else if line.starts_with('-') {
-                Style::default().fg(colors::DELETED)
+                (colors::RED, Color::Rgb(30, 15, 15))
             } else if line.starts_with("@@") {
-                Style::default().fg(Color::Cyan)
+                (colors::ACCENT, Color::Rgb(18, 14, 32))
             } else {
-                Style::default().fg(Color::White)
+                (colors::TEXT_SECONDARY, colors::BG_PANEL)
             };
-            Line::styled(line, style)
+            Line::styled(line, Style::default().fg(fg).bg(bg))
         })
         .collect();
 
@@ -431,21 +823,19 @@ fn draw_diff_view(f: &mut Frame, app: &mut App, area: Rect) {
     let max_scroll = total.saturating_sub(visible);
     let scroll = app.diff_scroll.min(max_scroll);
 
-    // Scroll percentage in title
     let scroll_info = if total > visible {
         let pct = if max_scroll > 0 {
             (scroll * 100) / max_scroll
         } else {
             0
         };
-        format!(" [{}/{}  {}%] ", scroll + 1, total, pct)
+        format!(" [{}/{}  {}%]", scroll + 1, total, pct)
     } else {
         String::new()
     };
 
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .title(format!(" Diff Preview{} ", scroll_info));
+    let title = format!("Diff Preview{}", scroll_info);
+    let block = styled_block(&title, false);
 
     let paragraph = Paragraph::new(all_lines)
         .block(block)
@@ -459,7 +849,8 @@ fn draw_diff_view(f: &mut Frame, app: &mut App, area: Rect) {
             .viewport_content_length(visible);
         let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
             .begin_symbol(Some("▲"))
-            .end_symbol(Some("▼"));
+            .end_symbol(Some("▼"))
+            .style(Style::default().fg(colors::ACCENT_GLOW));
         let sb_area = Rect::new(
             area.x + area.width - 1,
             area.y + 1,
@@ -472,191 +863,258 @@ fn draw_diff_view(f: &mut Frame, app: &mut App, area: Rect) {
     app.diff_area = Some(area);
 }
 
-// ── Branches Tab ────────────────────────────────────────
+// ── Branches Tab ───────────────────────────────────────────
 
 fn draw_branches_tab(f: &mut Frame, app: &mut App, area: Rect) {
-    let items: Vec<ListItem> = app
+    let local_branches: Vec<(usize, &crate::git_ops::BranchInfo)> = app
         .branches
         .iter()
         .enumerate()
-        .map(|(i, branch)| {
-            let icon = if branch.is_head {
-                "→"
-            } else if branch.is_remote {
-                "☁"
-            } else {
-                " "
-            };
-
-            let name_color = if branch.is_head {
-                colors::HEAD
-            } else if branch.is_remote {
-                colors::REMOTE
-            } else {
-                colors::BRANCH
-            };
-
-            let upstream_str = branch
-                .upstream
-                .as_ref()
-                .map(|u| format!(" ↔ {}", u))
-                .unwrap_or_default();
-
-            let style = if i == app.branch_selected {
-                Style::default()
-                    .bg(Color::DarkGray)
-                    .add_modifier(Modifier::BOLD)
-            } else {
-                Style::default()
-            };
-
-            ListItem::new(Line::from(vec![
-                Span::styled(
-                    format!(" {} ", icon),
-                    Style::default().fg(name_color).add_modifier(Modifier::BOLD),
-                ),
-                Span::styled(&branch.name, Style::default().fg(name_color)),
-                Span::styled(
-                    format!("  {}", branch.commit_id),
-                    Style::default().fg(Color::DarkGray),
-                ),
-                Span::styled(upstream_str, Style::default().fg(Color::DarkGray)),
-            ]))
-            .style(style)
-        })
+        .filter(|(_, b)| !b.is_remote)
+        .collect();
+    let remote_branches: Vec<(usize, &crate::git_ops::BranchInfo)> = app
+        .branches
+        .iter()
+        .enumerate()
+        .filter(|(_, b)| b.is_remote)
         .collect();
 
-    let block = Block::default().borders(Borders::ALL).title(
-        " Branches  (Enter: checkout │ n: new │ d: delete │ P: push │ L: pull) ",
-    );
-    let list = List::new(items).block(block);
-    f.render_widget(list, area);
+    let mut items: Vec<ListItem> = Vec::new();
+    let mut row_to_branch: Vec<Option<usize>> = Vec::new();
 
-    let inner = inner_rect(area);
-    for i in 0..app.branches.len().min(inner.height as usize) {
-        let row = Rect::new(inner.x, inner.y + i as u16, inner.width, 1);
-        app.register_click_region(row, ClickAction::SelectBranch(i));
+    // Local header
+    items.push(ListItem::new(Line::from(Span::styled(
+        "  LOCAL",
+        Style::default()
+            .fg(colors::TEXT_DIM)
+            .add_modifier(Modifier::BOLD),
+    ))));
+    row_to_branch.push(None);
+
+    for (idx, branch) in &local_branches {
+        let sel = *idx == app.branch_selected;
+        let icon = if branch.is_head { "→" } else { "⎇" };
+        let name_color = if branch.is_head {
+            colors::YELLOW
+        } else {
+            colors::GREEN
+        };
+
+        let mut spans = vec![
+            Span::styled(
+                format!("  {} ", icon),
+                Style::default().fg(name_color).add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                &branch.name,
+                Style::default().fg(name_color).add_modifier(if branch.is_head {
+                    Modifier::BOLD
+                } else {
+                    Modifier::empty()
+                }),
+            ),
+            Span::styled(
+                format!("  {}", branch.commit_id),
+                Style::default().fg(colors::TEXT_DIM),
+            ),
+        ];
+        if let Some(u) = &branch.upstream {
+            spans.push(Span::styled(
+                format!("  ↔ {}", u),
+                Style::default().fg(colors::TEXT_DIM),
+            ));
+        }
+
+        let style = if sel {
+            Style::default().bg(colors::BG_SELECT)
+        } else {
+            Style::default()
+        };
+        items.push(ListItem::new(Line::from(spans)).style(style));
+        row_to_branch.push(Some(*idx));
+    }
+
+    // Remote header
+    items.push(ListItem::new(Line::from(Span::styled(
+        "  REMOTE",
+        Style::default()
+            .fg(colors::TEXT_DIM)
+            .add_modifier(Modifier::BOLD),
+    ))));
+    row_to_branch.push(None);
+
+    for (idx, branch) in &remote_branches {
+        let sel = *idx == app.branch_selected;
+        let spans = vec![
+            Span::styled(
+                "  ☁ ",
+                Style::default()
+                    .fg(colors::CYAN)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(&branch.name, Style::default().fg(colors::ACCENT_BRIGHT)),
+            Span::styled(
+                format!("  {}", branch.commit_id),
+                Style::default().fg(colors::TEXT_DIM),
+            ),
+        ];
+
+        let style = if sel {
+            Style::default().bg(colors::BG_SELECT)
+        } else {
+            Style::default()
+        };
+        items.push(ListItem::new(Line::from(spans)).style(style));
+        row_to_branch.push(Some(*idx));
+    }
+
+    let title = format!("Branches ({})", app.branches.len());
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(colors::BORDER_FOCUS))
+        .title(Line::from(vec![
+            Span::styled(
+                format!(" {} ", title),
+                Style::default()
+                    .fg(colors::ACCENT_BRIGHT)
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ]))
+        .title_bottom(Line::from(Span::styled(
+            " Enter: checkout │ n: new │ d: delete ",
+            Style::default().fg(colors::TEXT_DIM),
+        )))
+        .style(Style::default().bg(colors::BG_PANEL));
+
+    // Limit width
+    let branch_area = Rect::new(area.x, area.y, area.width.min(80), area.height);
+    let list = List::new(items).block(block);
+    f.render_widget(list, branch_area);
+
+    // Click regions mapped through row_to_branch
+    let inner = inner_rect(branch_area);
+    for i in 0..row_to_branch.len().min(inner.height as usize) {
+        if let Some(branch_idx) = row_to_branch[i] {
+            let row = Rect::new(inner.x, inner.y + i as u16, inner.width, 1);
+            app.register_click_region(row, ClickAction::SelectBranch(branch_idx));
+        }
     }
 }
 
-// ── Popups ──────────────────────────────────────────────
-
-fn centered_rect(percent_x: u16, height: u16, r: Rect) -> Rect {
-    let popup_layout = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length((r.height.saturating_sub(height)) / 2),
-            Constraint::Length(height),
-            Constraint::Min(0),
-        ])
-        .split(r);
-
-    Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([
-            Constraint::Percentage((100 - percent_x) / 2),
-            Constraint::Percentage(percent_x),
-            Constraint::Percentage((100 - percent_x) / 2),
-        ])
-        .split(popup_layout[1])[1]
-}
+// ── Popups ─────────────────────────────────────────────────
 
 fn draw_input_popup(f: &mut Frame, title: &str, prompt: &str, input: &str) {
-    let area = centered_rect(50, 5, f.area());
+    let area = centered_rect(50, 6, f.area());
     f.render_widget(Clear, area);
 
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(colors::ACCENT))
-        .title(format!(" {} ", title));
+        .title(Span::styled(
+            format!(" {} ", title),
+            Style::default()
+                .fg(colors::ACCENT_BRIGHT)
+                .add_modifier(Modifier::BOLD),
+        ))
+        .style(Style::default().bg(colors::BG_SURFACE));
 
-    let text = format!("{}\n> {}", prompt, input);
-    let paragraph = Paragraph::new(text)
-        .block(block)
-        .style(Style::default().fg(Color::White));
+    let lines = vec![
+        Line::from(Span::styled(prompt, Style::default().fg(colors::TEXT_SECONDARY))),
+        Line::raw(""),
+        Line::from(vec![
+            Span::styled("  > ", Style::default().fg(colors::ACCENT)),
+            Span::styled(input, Style::default().fg(colors::TEXT)),
+        ]),
+    ];
+
+    let paragraph = Paragraph::new(lines).block(block);
     f.render_widget(paragraph, area);
 
-    let x = area.x + 3 + input.len() as u16;
-    let y = area.y + 2;
+    let x = area.x + 5 + input.len() as u16;
+    let y = area.y + 3;
     f.set_cursor_position((x, y));
 }
 
 fn draw_confirm_popup(f: &mut Frame, title: &str, message: &str) {
     let line_count = message.lines().count() as u16;
-    let area = centered_rect(50, line_count + 3, f.area());
+    let area = centered_rect(45, line_count + 4, f.area());
     f.render_widget(Clear, area);
 
-    let border_color = match title {
-        "Push" => colors::PUSH,
-        "Pull" => colors::PULL,
-        _ => Color::Red,
+    let border_color = if title.contains("Push") {
+        colors::GREEN
+    } else if title.contains("Pull") {
+        colors::CYAN
+    } else {
+        colors::RED
     };
 
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(border_color))
-        .title(format!(" {} ", title));
+        .title(Span::styled(
+            format!(" {} ", title),
+            Style::default()
+                .fg(border_color)
+                .add_modifier(Modifier::BOLD),
+        ))
+        .style(Style::default().bg(colors::BG_SURFACE));
 
     let paragraph = Paragraph::new(message)
         .block(block)
-        .style(Style::default().fg(Color::White));
+        .style(Style::default().fg(colors::TEXT));
     f.render_widget(paragraph, area);
 }
 
 fn draw_help_popup(f: &mut Frame) {
-    let area = centered_rect(60, 24, f.area());
+    let area = centered_rect(55, 22, f.area());
     f.render_widget(Clear, area);
-
-    let help_text = "\
- Navigation
-   1/2/3 or Tab     Switch tabs
-   ↑/↓ or j/k       Move selection
-   Mouse click       Select items, switch tabs
-   q                 Quit
-
- Files Tab
-   Tab               Cycle: Unstaged → Staged → Commit
-   s / S             Stage selected / Stage all
-   u / U             Unstage selected / Unstage all
-   c                 Start typing commit message
-   Enter             Commit (when in commit message)
-
- Branches Tab
-   Enter             Checkout selected branch
-   n                 Create new branch
-   d                 Delete selected branch
-
- Remote Operations
-   P                 Push to remote
-   L                 Pull from remote (fast-forward)
-   F                 Fetch from remote
-
- Diff View
-   Mouse scroll      Scroll diff up/down
-   PgUp / PgDn       Scroll diff by page
-
- General
-   r                 Refresh all data
-   ?                 Toggle this help";
 
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(colors::ACCENT))
-        .title(" Help ");
+        .title(Span::styled(
+            " Keyboard Shortcuts ",
+            Style::default()
+                .fg(colors::ACCENT_BRIGHT)
+                .add_modifier(Modifier::BOLD),
+        ))
+        .style(Style::default().bg(colors::BG_SURFACE));
 
-    let paragraph = Paragraph::new(help_text)
-        .block(block)
-        .style(Style::default().fg(Color::White));
+    let shortcuts = [
+        ("1/2/3", "Switch tabs"),
+        ("↑↓ j/k", "Navigate"),
+        ("Tab", "Cycle panes"),
+        ("s / S", "Stage / Stage all"),
+        ("u / U", "Unstage / Unstage all"),
+        ("c", "Write commit msg"),
+        ("Enter", "Commit / Checkout"),
+        ("n", "New branch"),
+        ("d", "Delete branch"),
+        ("P", "Push to remote"),
+        ("L", "Pull from remote"),
+        ("F", "Fetch from remote"),
+        ("PgUp/PgDn", "Scroll diff"),
+        ("Mouse", "Click & scroll"),
+        ("r", "Refresh"),
+        ("q", "Quit"),
+    ];
+
+    let mut lines: Vec<Line> = Vec::new();
+    for (key, desc) in &shortcuts {
+        lines.push(Line::from(vec![
+            Span::styled(
+                format!("  {:14}", key),
+                Style::default().fg(colors::ACCENT),
+            ),
+            Span::styled(*desc, Style::default().fg(colors::TEXT_SECONDARY)),
+        ]));
+    }
+    lines.push(Line::raw(""));
+    lines.push(Line::from(Span::styled(
+        "         Press ? or Esc to close",
+        Style::default().fg(colors::TEXT_DIM),
+    )));
+
+    let paragraph = Paragraph::new(lines).block(block);
     f.render_widget(paragraph, area);
-}
-
-// ── Helpers ─────────────────────────────────────────────
-
-fn inner_rect(area: Rect) -> Rect {
-    Rect::new(
-        area.x + 1,
-        area.y + 1,
-        area.width.saturating_sub(2),
-        area.height.saturating_sub(2),
-    )
 }
