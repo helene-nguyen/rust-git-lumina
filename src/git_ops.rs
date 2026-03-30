@@ -1,0 +1,549 @@
+use anyhow::{Context, Result};
+use git2::{
+    BranchType, Cred, DiffOptions, FetchOptions, PushOptions,
+    RemoteCallbacks, Repository, Signature, Sort, Status, StatusOptions, StatusShow,
+};
+use std::env;
+use std::path::Path;
+
+/// Represents remote tracking info (ahead/behind counts)
+#[derive(Clone, Debug, Default)]
+pub struct RemoteStatus {
+    pub ahead: usize,
+    pub behind: usize,
+    pub remote_name: Option<String>,
+    #[allow(dead_code)]
+    pub upstream_branch: Option<String>,
+}
+
+/// Represents a single commit in the log
+#[derive(Clone, Debug)]
+pub struct CommitInfo {
+    pub id: String,        // short SHA
+    pub id_full: String,   // full SHA
+    pub message: String,   // first line of commit message
+    pub author: String,
+    pub time: i64,         // unix timestamp
+    pub parents: Vec<String>,
+    pub branches: Vec<String>,
+    pub is_head: bool,
+}
+
+/// Represents a file's status in the working tree
+#[derive(Clone, Debug)]
+pub struct FileStatus {
+    pub path: String,
+    pub status: FileState,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum FileState {
+    New,
+    Modified,
+    Deleted,
+    Renamed,
+    Typechange,
+    Conflicted,
+}
+
+/// Represents a branch
+#[derive(Clone, Debug)]
+pub struct BranchInfo {
+    pub name: String,
+    pub is_head: bool,
+    pub is_remote: bool,
+    pub upstream: Option<String>,
+    pub commit_id: String,
+}
+
+/// Opens a repository at the given path (or current dir)
+pub fn open_repo(path: Option<&str>) -> Result<Repository> {
+    let path = path.unwrap_or(".");
+    Repository::discover(path).context("Failed to find a Git repository")
+}
+
+/// Get the commit log with branch labels
+pub fn get_commits(repo: &Repository, max_count: usize) -> Result<Vec<CommitInfo>> {
+    // Empty repo — no HEAD yet
+    if repo.head().is_err() {
+        return Ok(Vec::new());
+    }
+
+    let mut revwalk = repo.revwalk()?;
+    revwalk.set_sorting(Sort::TIME | Sort::TOPOLOGICAL)?;
+    revwalk.push_head()?;
+
+    // Also push all branch tips so we see everything
+    for branch in repo.branches(Some(BranchType::Local))? {
+        let (branch, _) = branch?;
+        if let Some(target) = branch.get().target() {
+            let _ = revwalk.push(target);
+        }
+    }
+
+    // Build a map of commit SHA -> branch names
+    let mut branch_map: std::collections::HashMap<String, Vec<String>> =
+        std::collections::HashMap::new();
+    for branch in repo.branches(None)? {
+        let (branch, _btype) = branch?;
+        if let (Some(name), Some(target)) = (branch.name()?, branch.get().target()) {
+            branch_map
+                .entry(target.to_string())
+                .or_default()
+                .push(name.to_string());
+        }
+    }
+
+    let head_target = repo.head().ok().and_then(|h| h.target());
+
+    let mut commits = Vec::new();
+    for oid in revwalk {
+        let oid = oid?;
+        let commit = repo.find_commit(oid)?;
+        let short_id = &oid.to_string()[..7];
+        let full_id = oid.to_string();
+
+        let message = commit
+            .message()
+            .unwrap_or("")
+            .lines()
+            .next()
+            .unwrap_or("")
+            .to_string();
+
+        let author = commit.author().name().unwrap_or("Unknown").to_string();
+        let time = commit.time().seconds();
+
+        let parents: Vec<String> = commit
+            .parent_ids()
+            .map(|p| p.to_string()[..7].to_string())
+            .collect();
+
+        let branches = branch_map.get(&full_id).cloned().unwrap_or_default();
+        let is_head = head_target.map_or(false, |h| h == oid);
+
+        commits.push(CommitInfo {
+            id: short_id.to_string(),
+            id_full: full_id,
+            message,
+            author,
+            time,
+            parents,
+            branches,
+            is_head,
+        });
+
+        if commits.len() >= max_count {
+            break;
+        }
+    }
+
+    Ok(commits)
+}
+
+/// Get the status of files in the working tree
+pub fn get_status(repo: &Repository) -> Result<(Vec<FileStatus>, Vec<FileStatus>)> {
+    let mut opts = StatusOptions::new();
+    opts.include_untracked(true)
+        .recurse_untracked_dirs(true)
+        .show(StatusShow::IndexAndWorkdir);
+
+    let statuses = repo.statuses(Some(&mut opts))?;
+
+    let mut staged = Vec::new();
+    let mut unstaged = Vec::new();
+
+    let index_checks: &[(Status, FileState)] = &[
+        (Status::INDEX_NEW, FileState::New),
+        (Status::INDEX_MODIFIED, FileState::Modified),
+        (Status::INDEX_DELETED, FileState::Deleted),
+        (Status::INDEX_RENAMED, FileState::Renamed),
+        (Status::INDEX_TYPECHANGE, FileState::Typechange),
+    ];
+
+    let wt_checks: &[(Status, FileState)] = &[
+        (Status::WT_NEW, FileState::New),
+        (Status::WT_MODIFIED, FileState::Modified),
+        (Status::WT_DELETED, FileState::Deleted),
+        (Status::WT_RENAMED, FileState::Renamed),
+        (Status::WT_TYPECHANGE, FileState::Typechange),
+        (Status::CONFLICTED, FileState::Conflicted),
+    ];
+
+    for entry in statuses.iter() {
+        let path = entry.path().unwrap_or("???").to_string();
+        let st = entry.status();
+
+        for (flag, state) in index_checks {
+            if st.contains(*flag) {
+                staged.push(FileStatus { path: path.clone(), status: state.clone() });
+            }
+        }
+        for (flag, state) in wt_checks {
+            if st.contains(*flag) {
+                unstaged.push(FileStatus { path: path.clone(), status: state.clone() });
+            }
+        }
+    }
+
+    Ok((staged, unstaged))
+}
+
+/// Stage a file (add to index)
+pub fn stage_file(repo: &Repository, path: &str) -> Result<()> {
+    let mut index = repo.index()?;
+    index.add_path(std::path::Path::new(path))?;
+    index.write()?;
+    Ok(())
+}
+
+/// Unstage a file (remove from index, keep in workdir)
+pub fn unstage_file(repo: &Repository, path: &str) -> Result<()> {
+    match repo.head().and_then(|h| h.peel_to_commit()) {
+        Ok(head) => {
+            repo.reset_default(Some(head.as_object()), [path])?;
+        }
+        Err(_) => {
+            // No commits yet — remove from index directly
+            let mut index = repo.index()?;
+            index.remove_path(std::path::Path::new(path))?;
+            index.write()?;
+        }
+    }
+    Ok(())
+}
+
+/// Create a commit with the current index
+pub fn create_commit(repo: &Repository, message: &str) -> Result<String> {
+    let mut index = repo.index()?;
+    let tree_oid = index.write_tree()?;
+    let tree = repo.find_tree(tree_oid)?;
+
+    let sig = repo.signature().or_else(|_| Signature::now("User", "user@example.com"))?;
+
+    let oid = match repo.head().and_then(|h| h.peel_to_commit()) {
+        Ok(parent) => repo.commit(Some("HEAD"), &sig, &sig, message, &tree, &[&parent])?,
+        Err(_) => repo.commit(Some("HEAD"), &sig, &sig, message, &tree, &[])?,
+    };
+
+    Ok(oid.to_string()[..7].to_string())
+}
+
+/// Get list of branches
+pub fn get_branches(repo: &Repository) -> Result<Vec<BranchInfo>> {
+    let mut branches = Vec::new();
+    for branch_result in repo.branches(None)? {
+        let (branch, btype) = branch_result?;
+        let name = branch.name()?.unwrap_or("???").to_string();
+        let is_remote = btype == BranchType::Remote;
+        let is_head = branch.is_head();
+
+        let upstream = branch
+            .upstream()
+            .ok()
+            .and_then(|u| u.name().ok().flatten().map(|s| s.to_string()));
+
+        let commit_id = branch
+            .get()
+            .target()
+            .map(|o| o.to_string()[..7].to_string())
+            .unwrap_or_default();
+
+        branches.push(BranchInfo {
+            name,
+            is_head,
+            is_remote,
+            upstream,
+            commit_id,
+        });
+    }
+
+    // Sort: HEAD first, then local, then remote
+    branches.sort_by(|a, b| {
+        b.is_head
+            .cmp(&a.is_head)
+            .then(a.is_remote.cmp(&b.is_remote))
+            .then(a.name.cmp(&b.name))
+    });
+
+    Ok(branches)
+}
+
+/// Create a new branch at HEAD
+pub fn create_branch(repo: &Repository, name: &str) -> Result<()> {
+    let head = repo.head()?.peel_to_commit()?;
+    repo.branch(name, &head, false)?;
+    Ok(())
+}
+
+/// Switch to a branch
+pub fn checkout_branch(repo: &Repository, name: &str) -> Result<()> {
+    let (object, reference) = repo.revparse_ext(&format!("refs/heads/{}", name))?;
+    repo.checkout_tree(&object, None)?;
+    if let Some(reference) = reference {
+        repo.set_head(reference.name().unwrap())?;
+    }
+    Ok(())
+}
+
+/// Delete a local branch
+pub fn delete_branch(repo: &Repository, name: &str) -> Result<()> {
+    let mut branch = repo.find_branch(name, BranchType::Local)?;
+    branch.delete()?;
+    Ok(())
+}
+
+/// Get diff for a specific file
+pub fn get_file_diff(repo: &Repository, path: &str, staged: bool) -> Result<String> {
+    let mut diff_opts = DiffOptions::new();
+    diff_opts.pathspec(path);
+
+    let diff = if staged {
+        let head_tree = repo.head().and_then(|h| h.peel_to_tree()).ok();
+        repo.diff_tree_to_index(head_tree.as_ref(), None, Some(&mut diff_opts))?
+    } else {
+        repo.diff_index_to_workdir(None, Some(&mut diff_opts))?
+    };
+
+    let mut result = String::new();
+    diff.print(git2::DiffFormat::Patch, |_delta, _hunk, line| {
+        let prefix = match line.origin() {
+            '+' => "+",
+            '-' => "-",
+            ' ' => " ",
+            _ => "",
+        };
+        result.push_str(&format!(
+            "{}{}",
+            prefix,
+            std::str::from_utf8(line.content()).unwrap_or("")
+        ));
+        true
+    })?;
+
+    if result.is_empty() {
+        result = "(no diff available)".to_string();
+    }
+
+    Ok(result)
+}
+
+/// Extract the remote name from an upstream ref like "origin/main" → "origin"
+fn parse_remote_name(upstream_name: &str) -> String {
+    upstream_name.split('/').next().unwrap_or("origin").to_string()
+}
+
+// ── Remote Operations ───────────────────────────────────
+
+/// Build remote callbacks with SSH key or credential discovery
+fn make_callbacks<'a>() -> RemoteCallbacks<'a> {
+    let mut callbacks = RemoteCallbacks::new();
+    callbacks.credentials(|url, username_from_url, allowed_types| {
+        // Try SSH agent first
+        if allowed_types.is_ssh_key() {
+            let user = username_from_url.unwrap_or("git");
+            // Try SSH agent
+            if let Ok(cred) = Cred::ssh_key_from_agent(user) {
+                return Ok(cred);
+            }
+            // Try default SSH key paths
+            let home = env::var("HOME").unwrap_or_else(|_| ".".to_string());
+            for key_name in &["id_ed25519", "id_rsa", "id_ecdsa"] {
+                let key_path = Path::new(&home).join(".ssh").join(key_name);
+                if key_path.exists() {
+                    if let Ok(cred) = Cred::ssh_key(user, None, &key_path, None) {
+                        return Ok(cred);
+                    }
+                }
+            }
+        }
+        // Try credential helper / default credentials
+        if allowed_types.is_user_pass_plaintext() {
+            if let Ok(cred) = Cred::credential_helper(
+                &git2::Config::open_default()?,
+                url,
+                username_from_url,
+            ) {
+                return Ok(cred);
+            }
+        }
+        Cred::default()
+    });
+
+    // Transfer progress callback
+    callbacks.transfer_progress(|_stats| true);
+
+    callbacks
+}
+
+/// Get ahead/behind counts relative to upstream
+pub fn get_remote_status(repo: &Repository) -> Result<RemoteStatus> {
+    let head = match repo.head() {
+        Ok(h) => h,
+        Err(_) => return Ok(RemoteStatus::default()),
+    };
+
+    let branch_name = match head.shorthand() {
+        Some(name) => name.to_string(),
+        None => return Ok(RemoteStatus::default()),
+    };
+
+    let local_branch = repo.find_branch(&branch_name, BranchType::Local)?;
+
+    let upstream = match local_branch.upstream() {
+        Ok(u) => u,
+        Err(_) => {
+            return Ok(RemoteStatus {
+                remote_name: None,
+                upstream_branch: None,
+                ahead: 0,
+                behind: 0,
+            })
+        }
+    };
+
+    let upstream_name = upstream
+        .name()?
+        .map(|s| s.to_string())
+        .unwrap_or_default();
+
+    let remote_name = Some(parse_remote_name(&upstream_name));
+
+    let local_oid = head.target().context("HEAD has no target")?;
+    let upstream_oid = upstream
+        .get()
+        .target()
+        .context("Upstream has no target")?;
+
+    let (ahead, behind) = repo.graph_ahead_behind(local_oid, upstream_oid)?;
+
+    Ok(RemoteStatus {
+        ahead,
+        behind,
+        remote_name,
+        upstream_branch: Some(upstream_name),
+    })
+}
+
+/// Fetch from the remote tracking the current branch
+pub fn fetch(repo: &Repository) -> Result<String> {
+    let head = repo.head().context("Cannot fetch: no HEAD")?;
+    let branch_name = head.shorthand().context("Cannot determine branch name")?;
+    let local_branch = repo.find_branch(branch_name, BranchType::Local)?;
+    let upstream = local_branch
+        .upstream()
+        .context("No upstream branch configured. Set one with: git branch --set-upstream-to=origin/<branch>")?;
+
+    let upstream_name = upstream
+        .name()?
+        .unwrap_or("origin")
+        .to_string();
+    let remote_name = parse_remote_name(&upstream_name);
+
+    let mut remote = repo.find_remote(&remote_name)?;
+
+    let callbacks = make_callbacks();
+    let mut fetch_opts = FetchOptions::new();
+    fetch_opts.remote_callbacks(callbacks);
+
+    let refspecs: Vec<String> = remote
+        .fetch_refspecs()?
+        .iter()
+        .filter_map(|s| s.map(|s| s.to_string()))
+        .collect();
+    let refspec_strs: Vec<&str> = refspecs.iter().map(|s| s.as_str()).collect();
+
+    remote.fetch(&refspec_strs, Some(&mut fetch_opts), None)?;
+
+    Ok(remote_name)
+}
+
+/// Pull: fetch + fast-forward merge
+pub fn pull(repo: &Repository) -> Result<String> {
+    // Step 1: Fetch
+    let remote_name = fetch(repo)?;
+
+    // Step 2: Get the updated upstream ref
+    let head = repo.head()?;
+    let branch_name = head.shorthand().context("No branch name")?;
+    let local_branch = repo.find_branch(branch_name, BranchType::Local)?;
+    let upstream = local_branch.upstream()?;
+    let upstream_oid = upstream.get().target().context("Upstream has no target")?;
+
+    let local_oid = head.target().context("HEAD has no target")?;
+
+    if local_oid == upstream_oid {
+        return Ok("Already up to date".to_string());
+    }
+
+    // Check if fast-forward is possible
+    let (ahead, behind) = repo.graph_ahead_behind(local_oid, upstream_oid)?;
+
+    if ahead > 0 && behind > 0 {
+        return Err(anyhow::anyhow!(
+            "Cannot fast-forward: local is {} ahead and {} behind. Please merge or rebase manually.",
+            ahead,
+            behind
+        ));
+    }
+
+    if behind == 0 {
+        return Ok("Already up to date".to_string());
+    }
+
+    // Fast-forward: move HEAD to upstream
+    let upstream_commit = repo.find_commit(upstream_oid)?;
+    let upstream_tree = upstream_commit.tree()?;
+
+    repo.checkout_tree(upstream_tree.as_object(), None)?;
+
+    // Update the branch ref
+    let refname = format!("refs/heads/{}", branch_name);
+    repo.reference(
+        &refname,
+        upstream_oid,
+        true,
+        &format!("pull: fast-forward to {}", &upstream_oid.to_string()[..7]),
+    )?;
+    repo.set_head(&refname)?;
+
+    Ok(format!(
+        "Fast-forwarded {} commits from {}",
+        behind, remote_name
+    ))
+}
+
+/// Push the current branch to its upstream remote
+pub fn push(repo: &Repository) -> Result<String> {
+    let head = repo.head().context("Cannot push: no HEAD")?;
+    let branch_name = head
+        .shorthand()
+        .context("Cannot determine branch name")?
+        .to_string();
+
+    let local_branch = repo.find_branch(&branch_name, BranchType::Local)?;
+    let upstream = local_branch
+        .upstream()
+        .context("No upstream branch configured. Set one with: git push -u origin <branch>")?;
+
+    let upstream_name = upstream
+        .name()?
+        .unwrap_or("origin")
+        .to_string();
+    let remote_name = parse_remote_name(&upstream_name);
+
+    let mut remote = repo.find_remote(&remote_name)?;
+
+    let callbacks = make_callbacks();
+    let mut push_opts = PushOptions::new();
+    push_opts.remote_callbacks(callbacks);
+
+    let refspec = format!("refs/heads/{}:refs/heads/{}", branch_name, branch_name);
+    remote.push(&[&refspec], Some(&mut push_opts))?;
+
+    Ok(format!(
+        "Pushed {} to {}/{}",
+        branch_name, remote_name, branch_name
+    ))
+}
+
