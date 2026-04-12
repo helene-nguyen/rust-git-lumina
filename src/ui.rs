@@ -148,8 +148,8 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(1), // title bar
-            Constraint::Length(1), // tab bar
+            Constraint::Length(3), // title bar (1 + padding)
+            Constraint::Length(3), // tab bar (1 + padding)
             Constraint::Min(0),   // content
             Constraint::Length(1), // status bar
         ])
@@ -204,6 +204,13 @@ pub fn draw(f: &mut Frame, app: &mut App) {
 // ── Title Bar ──────────────────────────────────────────────
 
 fn draw_title_bar(f: &mut Frame, app: &mut App, area: Rect) {
+    // Fill background for entire area
+    let bg_block = Block::default().style(Style::default().bg(colors::BG_TITLE));
+    f.render_widget(bg_block, area);
+
+    // Center content vertically
+    let row = Rect::new(area.x, area.y + area.height / 2, area.width, 1);
+
     let branch = &app.current_branch;
     let ahead = app.remote_status.ahead;
     let behind = app.remote_status.behind;
@@ -228,7 +235,7 @@ fn draw_title_bar(f: &mut Frame, app: &mut App, area: Rect) {
 
     let left_width: usize = left.iter().map(|s| s.content.len()).sum();
     let right_width: usize = right.iter().map(|s| s.content.len()).sum();
-    let pad = (area.width as usize).saturating_sub(left_width + right_width);
+    let pad = (row.width as usize).saturating_sub(left_width + right_width);
 
     let mut spans = left;
     spans.push(Span::raw(" ".repeat(pad)));
@@ -236,20 +243,20 @@ fn draw_title_bar(f: &mut Frame, app: &mut App, area: Rect) {
 
     let bar = Paragraph::new(Line::from(spans))
         .style(Style::default().bg(colors::BG_TITLE));
-    f.render_widget(bar, area);
+    f.render_widget(bar, row);
 
     // Click regions for Push, Pull, Fetch buttons
-    let push_x = area.x + area.width.saturating_sub(right_width as u16);
+    let push_x = row.x + row.width.saturating_sub(right_width as u16);
     app.register_click_region(
-        Rect::new(push_x, area.y, 7, 1),
+        Rect::new(push_x, row.y, 7, 1),
         ClickAction::PushButton,
     );
     app.register_click_region(
-        Rect::new(push_x + 7, area.y, 7, 1),
+        Rect::new(push_x + 7, row.y, 7, 1),
         ClickAction::PullButton,
     );
     app.register_click_region(
-        Rect::new(push_x + 14, area.y, 8, 1),
+        Rect::new(push_x + 14, row.y, 8, 1),
         ClickAction::FetchButton,
     );
 }
@@ -257,6 +264,13 @@ fn draw_title_bar(f: &mut Frame, app: &mut App, area: Rect) {
 // ── Tab Bar ────────────────────────────────────────────────
 
 fn draw_tab_bar(f: &mut Frame, app: &mut App, area: Rect) {
+    // Fill background for entire area
+    let bg_block = Block::default().style(Style::default().bg(colors::BG_TAB));
+    f.render_widget(bg_block, area);
+
+    // Center content vertically
+    let row = Rect::new(area.x, area.y + area.height / 2, area.width, 1);
+
     let tab_names = ["1 Graph", "2 Files", "3 Branches"];
     let mut spans: Vec<Span> = Vec::new();
     spans.push(Span::raw(" "));
@@ -283,16 +297,16 @@ fn draw_tab_bar(f: &mut Frame, app: &mut App, area: Rect) {
     // Right side: Refresh button
     let used: usize = spans.iter().map(|s| s.content.len()).sum();
     let refresh_text = "⟳ Refresh ";
-    let pad = (area.width as usize).saturating_sub(used + refresh_text.len());
+    let pad = (row.width as usize).saturating_sub(used + refresh_text.len());
     spans.push(Span::raw(" ".repeat(pad)));
     spans.push(Span::styled(refresh_text, Style::default().fg(colors::TEXT_MUTED)));
 
     let bar = Paragraph::new(Line::from(spans))
         .style(Style::default().bg(colors::BG_TAB));
-    f.render_widget(bar, area);
+    f.render_widget(bar, row);
 
     // Tab click regions
-    let mut x = area.x + 1;
+    let mut x = row.x + 1;
     for (i, name) in tab_names.iter().enumerate() {
         let w = name.len() as u16 + 2; // padding
         let tab = match i {
@@ -300,13 +314,13 @@ fn draw_tab_bar(f: &mut Frame, app: &mut App, area: Rect) {
             1 => Tab::Files,
             _ => Tab::Branches,
         };
-        app.register_click_region(Rect::new(x, area.y, w, 1), ClickAction::SelectTab(tab));
+        app.register_click_region(Rect::new(x, row.y, w, 1), ClickAction::SelectTab(tab));
         x += w + 2;
     }
 
     // Refresh click region
     app.register_click_region(
-        Rect::new(area.x + area.width - refresh_text.len() as u16, area.y, refresh_text.len() as u16, 1),
+        Rect::new(row.x + row.width - refresh_text.len() as u16, row.y, refresh_text.len() as u16, 1),
         ClickAction::RefreshButton,
     );
 }
