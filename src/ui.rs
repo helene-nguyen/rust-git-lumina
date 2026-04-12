@@ -319,6 +319,12 @@ fn draw_status_bar(f: &mut Frame, app: &App, area: Rect) {
         InputMode::Normal => "? help │ q quit │ P push │ L pull │ F fetch │ ↑↓ nav",
     };
 
+    let auto_tag = if app.auto_refresh {
+        Span::styled(" [AUTO] ", Style::default().fg(colors::GREEN))
+    } else {
+        Span::raw("")
+    };
+
     let left = if app.status_msg.is_empty() {
         Span::styled(" Ready", Style::default().fg(colors::TEXT_MUTED))
     } else {
@@ -327,11 +333,12 @@ fn draw_status_bar(f: &mut Frame, app: &App, area: Rect) {
 
     let right = Span::styled(format!("{} ", hints), Style::default().fg(colors::TEXT_DIM));
 
+    let auto_w = auto_tag.content.len();
     let left_w = left.content.len();
     let right_w = right.content.len();
-    let pad = (area.width as usize).saturating_sub(left_w + right_w);
+    let pad = (area.width as usize).saturating_sub(auto_w + left_w + right_w);
 
-    let line = Line::from(vec![left, Span::raw(" ".repeat(pad)), right]);
+    let line = Line::from(vec![left, auto_tag, Span::raw(" ".repeat(pad)), right]);
     let bar = Paragraph::new(line).style(Style::default().bg(colors::BG_STATUS));
     f.render_widget(bar, area);
 }

@@ -2,6 +2,7 @@ use crate::git_ops::{self, BranchInfo, CommitInfo, FileStatus, GraphLane, Remote
 use anyhow::Result;
 use git2::Repository;
 use ratatui::layout::Rect;
+use std::time::{Duration, Instant};
 
 /// Which tab the user is viewing
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -87,6 +88,11 @@ pub struct App {
     // Remote status
     pub remote_status: RemoteStatus,
 
+    // Auto-refresh
+    pub auto_refresh: bool,
+    pub auto_refresh_interval: Duration,
+    pub last_refresh: Instant,
+
     // Mouse click region tracking — set during rendering
     pub click_regions: Vec<ClickRegion>,
 }
@@ -145,6 +151,9 @@ impl App {
             branches: Vec::new(),
             branch_selected: 0,
             remote_status: RemoteStatus::default(),
+            auto_refresh: false,
+            auto_refresh_interval: Duration::from_secs(2),
+            last_refresh: Instant::now(),
             click_regions: Vec::new(),
         };
         app.refresh_all()?;
@@ -158,7 +167,26 @@ impl App {
         self.refresh_branches()?;
         self.refresh_remote_status();
         self.current_branch = git_ops::get_current_branch(&self.repo);
+        self.last_refresh = Instant::now();
         Ok(())
+    }
+
+    /// Toggle auto-refresh on/off
+    pub fn toggle_auto_refresh(&mut self) {
+        self.auto_refresh = !self.auto_refresh;
+        if self.auto_refresh {
+            self.last_refresh = Instant::now();
+            self.status_msg = "Auto-refresh ON (2s)".to_string();
+        } else {
+            self.status_msg = "Auto-refresh OFF".to_string();
+        }
+    }
+
+    /// Check if an auto-refresh is due, and perform it if so
+    pub fn maybe_auto_refresh(&mut self) {
+        if self.auto_refresh && self.last_refresh.elapsed() >= self.auto_refresh_interval {
+            let _ = self.refresh_all();
+        }
     }
 
     pub fn refresh_commits(&mut self) -> Result<()> {

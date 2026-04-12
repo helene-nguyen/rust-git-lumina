@@ -6,8 +6,8 @@ use anyhow::Result;
 use app::{App, FilePane, InputMode, Popup, Tab};
 use crossterm::{
     event::{
-        self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyModifiers, MouseButton,
-        MouseEvent, MouseEventKind,
+        self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind, KeyModifiers,
+        MouseButton, MouseEvent, MouseEventKind,
     },
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
@@ -58,7 +58,7 @@ fn run_app(
 
         if event::poll(Duration::from_millis(250))? {
             match event::read()? {
-                Event::Key(key) => {
+                Event::Key(key) if key.kind == KeyEventKind::Press => {
                     // Ctrl+C always quits
                     if key.modifiers.contains(KeyModifiers::CONTROL)
                         && key.code == KeyCode::Char('c')
@@ -95,6 +95,8 @@ fn run_app(
                 _ => {}
             }
         }
+
+        app.maybe_auto_refresh();
 
         if !app.running {
             return Ok(());
@@ -152,6 +154,9 @@ fn handle_normal_input(app: &mut App, key: KeyCode) {
             let _ = app.refresh_all();
             app.status_msg = "Refreshed".to_string();
         }
+
+        // Auto-refresh toggle
+        KeyCode::Char('a') => app.toggle_auto_refresh(),
 
         // Help
         KeyCode::Char('?') => app.show_help(),
