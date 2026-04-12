@@ -87,6 +87,7 @@ pub struct App {
 
     // Remote status
     pub remote_status: RemoteStatus,
+    pub remote_url: Option<String>,
 
     // Auto-refresh
     pub auto_refresh: bool,
@@ -151,6 +152,7 @@ impl App {
             branches: Vec::new(),
             branch_selected: 0,
             remote_status: RemoteStatus::default(),
+            remote_url: None,
             auto_refresh: false,
             auto_refresh_interval: Duration::from_secs(2),
             last_refresh: Instant::now(),
@@ -222,6 +224,10 @@ impl App {
 
     pub fn refresh_remote_status(&mut self) {
         self.remote_status = git_ops::get_remote_status(&self.repo).unwrap_or_default();
+        self.remote_url = git_ops::get_remote_url(
+            &self.repo,
+            self.remote_status.remote_name.as_deref(),
+        );
     }
 
     /// Update the diff preview based on current selection

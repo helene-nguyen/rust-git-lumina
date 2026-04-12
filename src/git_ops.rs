@@ -425,6 +425,14 @@ pub fn get_remote_status(repo: &Repository) -> Result<RemoteStatus> {
     })
 }
 
+/// Get the URL of a remote (defaults to "origin" if name is None)
+pub fn get_remote_url(repo: &Repository, name: Option<&str>) -> Option<String> {
+    let remote_name = name.unwrap_or("origin");
+    repo.find_remote(remote_name)
+        .ok()
+        .and_then(|r| r.url().map(|u| u.to_string()))
+}
+
 /// Fetch from the remote tracking the current branch
 pub fn fetch(repo: &Repository) -> Result<String> {
     let head = repo.head().context("Cannot fetch: no HEAD")?;

@@ -215,7 +215,7 @@ fn draw_title_bar(f: &mut Frame, app: &mut App, area: Rect) {
     let ahead = app.remote_status.ahead;
     let behind = app.remote_status.behind;
 
-    let left: Vec<Span> = vec![
+    let mut left: Vec<Span> = vec![
         Span::styled(" ⎇ ", Style::default().fg(colors::ACCENT_BRIGHT).add_modifier(Modifier::BOLD)),
         Span::styled("Git", Style::default().fg(colors::TEXT).add_modifier(Modifier::BOLD)),
         Span::styled("Lumina", Style::default().fg(colors::ACCENT).add_modifier(Modifier::BOLD)),
@@ -223,6 +223,11 @@ fn draw_title_bar(f: &mut Frame, app: &mut App, area: Rect) {
         Span::styled("● ", Style::default().fg(colors::ACCENT_GLOW)),
         Span::styled(branch.as_str(), Style::default().fg(colors::TEXT)),
     ];
+
+    if let Some(ref url) = app.remote_url {
+        left.push(Span::styled("  → ", Style::default().fg(colors::TEXT_DIM)));
+        left.push(Span::styled(url.as_str(), Style::default().fg(colors::TEXT_MUTED)));
+    }
 
     let right: Vec<Span> = vec![
         Span::styled(format!("↑{}", ahead), Style::default().fg(colors::GREEN).add_modifier(Modifier::BOLD)),
@@ -821,7 +826,21 @@ fn draw_commit_input(f: &mut Frame, app: &mut App, area: Rect) {
     }
 }
 
+fn parse_hunk_header(line: &str) -> Option<(usize, usize)> {
+    // Parse "@@ -old_start,old_len +new_start,new_len @@"
+    let after_at = line.strip_prefix("@@ ")?;
+    let parts: Vec<&str> = after_at.splitn(3, ' ').collect();
+    if parts.len() < 2 { return None; }
+    let old_start = parts[0].strip_prefix('-')?.split(',').next()?.parse::<usize>().ok()?;
+    let new_start = parts[1].strip_prefix('+')?.split(',').next()?.parse::<usize>().ok()?;
+    Some((old_start, new_start))
+}
+
 fn draw_diff_view(f: &mut Frame, app: &mut App, area: Rect) {
+    let gutter_width = 7; // "nnn│ " format
+    let mut old_line: usize = 0;
+    let mut new_line: usize = 0;
+
     let all_lines: Vec<Line> = app
         .diff_text
         .lines()
@@ -835,7 +854,40 @@ fn draw_diff_view(f: &mut Frame, app: &mut App, area: Rect) {
             } else {
                 (colors::TEXT_SECONDARY, colors::BG_PANEL)
             };
-            Line::styled(line, Style::default().fg(fg).bg(bg))
+
+            let gutter = if line.starts_with("@@") {
+                if let Some((o, n)) = parse_hunk_header(line) {
+                    old_line = o;
+                    new_line = n;
+                }
+                Span::styled(
+                    " ··· │ ",
+                    Style::default().fg(colors::TEXT_DIM).bg(bg),
+                )
+            } else if line.starts_with('+') {
+                let s = format!("{:>3} │ ", new_line);
+                new_line += 1;
+                Span::styled(s, Style::default().fg(colors::GREEN).bg(bg))
+            } else if line.starts_with('-') {
+                let s = format!("{:>3} │ ", old_line);
+                old_line += 1;
+                Span::styled(s, Style::default().fg(colors::RED).bg(bg))
+            } else if old_line > 0 {
+                let s = format!("{:>3} │ ", new_line);
+                old_line += 1;
+                new_line += 1;
+                Span::styled(s, Style::default().fg(colors::TEXT_DIM).bg(bg))
+            } else {
+                Span::styled(
+                    " ".repeat(gutter_width),
+                    Style::default().bg(bg),
+                )
+            };
+
+            Line::from(vec![
+                gutter,
+                Span::styled(line, Style::default().fg(fg).bg(bg)),
+            ])
         })
         .collect();
 
