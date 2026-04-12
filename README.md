@@ -1,6 +1,6 @@
 # GitLumina TUI
 
-A terminal-based Git client inspired by GitLumina, built with Rust.
+A terminal-based Git client inspired by GitKraken, built with Rust.
 
 ## Features
 
@@ -10,6 +10,7 @@ A terminal-based Git client inspired by GitLumina, built with Rust.
 - **Push / Pull / Fetch** — Full remote operations with SSH key and credential helper support
 - **Mouse Support** — Click to select commits, files, branches, and tabs
 - **Scrollable Diff** — Mouse wheel and PageUp/PageDn scroll through diffs with a scrollbar indicator
+- **Auto-Refresh** — Toggle automatic repository refresh every 2 seconds with `[AUTO]` status indicator
 
 ## Prerequisites
 
@@ -45,8 +46,9 @@ cd /path/to/your/repo
 | `P`         | Push to remote    |
 | `L`         | Pull from remote  |
 | `F`         | Fetch from remote |
-| `r`         | Refresh all data  |
-| `?`         | Toggle help popup |
+| `r`         | Refresh all data    |
+| `a`         | Toggle auto-refresh |
+| `?`         | Toggle help popup   |
 | `q`         | Quit              |
 | `Ctrl+C`    | Force quit        |
 
