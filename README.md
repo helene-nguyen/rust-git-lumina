@@ -13,7 +13,7 @@ A terminal-based Git client inspired by GitLumina, built with Rust.
 
 ## Prerequisites
 
-- [Rust toolchain](https://rustup.rs/) (1.70+)
+- [Rust toolchain](https://rustup.rs/) (1.85+)
 - `libgit2` dev headers:
   - **Ubuntu/Debian**: `sudo apt install libgit2-dev pkg-config`
   - **macOS**: bundled automatically via `git2` crate
