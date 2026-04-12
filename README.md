@@ -12,6 +12,20 @@ A terminal-based Git client inspired by GitKraken, built with Rust.
 - **Scrollable Diff** — Mouse wheel and PageUp/PageDn scroll through diffs with a scrollbar indicator
 - **Auto-Refresh** — Toggle automatic repository refresh every 2 seconds with `[AUTO]` status indicator
 
+![GitLumina Demo](./docs/media/gitlumina.gif)
+
+## Installation
+
+```bash
+cargo install git-lumina
+```
+
+This installs both `lumina` and `gitlumina` commands globally. Then navigate to any Git repository and run:
+
+```bash
+lumina
+```
+
 ## Prerequisites
 
 - [Rust toolchain](https://rustup.rs/) (1.85+)
@@ -21,7 +35,7 @@ A terminal-based Git client inspired by GitKraken, built with Rust.
   - **Arch**: `sudo pacman -S libgit2`
 - A Git repository to open
 
-## Build & Run
+## Developers Build & Run
 
 ```bash
 cd git-lumina
