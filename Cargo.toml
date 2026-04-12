@@ -4,6 +4,14 @@ version = "0.1.0"
 edition = "2024"
 description = "A TUI Git client"
 
+[[bin]]
+name = "lumina"
+path = "src/main.rs"
+
+[[bin]]
+name = "gitlumina"
+path = "src/main.rs"
+
 [dependencies]
 ratatui = "0.28"
 crossterm = "0.28"
