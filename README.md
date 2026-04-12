@@ -29,8 +29,12 @@ cargo build --release
 
 # Run inside any Git repository
 cd /path/to/your/repo
-/path/to/git-lumina/target/release/git-lumina
+lumina
+# or
+gitlumina
 ```
+
+> After `cargo install --path .`, both `lumina` and `gitlumina` commands are available globally.
 
 ## Keybindings
 
