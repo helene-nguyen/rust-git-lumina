@@ -642,3 +642,430 @@ pub fn get_current_branch(repo: &Repository) -> String {
         .unwrap_or_else(|| "detached".to_string())
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+
+    /// Create a temp directory and init a git repo inside it.
+    /// Returns (Repository, TempDir path) — caller should clean up.
+    fn temp_repo() -> (Repository, std::path::PathBuf) {
+        let id = COUNTER.fetch_add(1, Ordering::SeqCst);
+        let dir = std::env::temp_dir().join(format!(
+            "git_lumina_test_{}_{}", std::process::id(), id
+        ));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let repo = Repository::init(&dir).unwrap();
+
+        // Configure a user so commits work
+        let mut config = repo.config().unwrap();
+        config.set_str("user.name", "Test User").unwrap();
+        config.set_str("user.email", "test@example.com").unwrap();
+
+        (repo, dir)
+    }
+
+    fn cleanup(dir: &std::path::Path) {
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    /// Helper: write a file, stage it, and commit
+    fn write_and_commit(repo: &Repository, dir: &std::path::Path, filename: &str, content: &str, msg: &str) -> String {
+        fs::write(dir.join(filename), content).unwrap();
+        stage_file(repo, filename).unwrap();
+        create_commit(repo, msg).unwrap()
+    }
+
+    // ── open_repo ───────────────────────────────────────
+
+    #[test]
+    fn given_a_valid_git_repo_when_opening_then_it_succeeds() {
+        let (_, dir) = temp_repo();
+        let result = open_repo(Some(dir.to_str().unwrap()));
+        assert!(result.is_ok());
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn given_an_invalid_path_when_opening_then_it_fails() {
+        let result = open_repo(Some("/nonexistent/path/surely"));
+        assert!(result.is_err());
+    }
+
+    // ── get_commits ─────────────────────────────────────
+
+    #[test]
+    fn given_an_empty_repo_when_getting_commits_then_returns_empty_list() {
+        let (repo, dir) = temp_repo();
+        let commits = get_commits(&repo, 100).unwrap();
+        assert!(commits.is_empty());
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn given_two_commits_when_getting_commits_then_returns_them_in_reverse_chronological_order() {
+        let (repo, dir) = temp_repo();
+        write_and_commit(&repo, &dir, "a.txt", "hello", "first commit");
+        write_and_commit(&repo, &dir, "b.txt", "world", "second commit");
+
+        let commits = get_commits(&repo, 100).unwrap();
+        assert_eq!(commits.len(), 2);
+        assert_eq!(commits[0].message, "second commit");
+        assert_eq!(commits[1].message, "first commit");
+        assert!(commits[0].is_head);
+        assert!(!commits[1].is_head);
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn given_five_commits_when_requesting_three_then_returns_only_three() {
+        let (repo, dir) = temp_repo();
+        for i in 0..5 {
+            write_and_commit(&repo, &dir, &format!("{}.txt", i), "x", &format!("commit {}", i));
+        }
+        let commits = get_commits(&repo, 3).unwrap();
+        assert_eq!(commits.len(), 3);
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn given_a_commit_when_inspecting_sha_then_short_is_7_chars_and_full_is_40_chars() {
+        let (repo, dir) = temp_repo();
+        write_and_commit(&repo, &dir, "a.txt", "data", "init");
+        let commits = get_commits(&repo, 1).unwrap();
+        assert_eq!(commits[0].id.len(), 7);
+        assert_eq!(commits[0].id_full.len(), 40);
+        assert!(commits[0].id_full.starts_with(&commits[0].id));
+        cleanup(&dir);
+    }
+
+    // ── get_status / stage / unstage ────────────────────
+
+    #[test]
+    fn given_a_new_untracked_file_when_getting_status_then_it_appears_as_unstaged_new() {
+        let (repo, dir) = temp_repo();
+        write_and_commit(&repo, &dir, "init.txt", "init", "init");
+        fs::write(dir.join("new.txt"), "content").unwrap();
+
+        let (staged, unstaged) = get_status(&repo).unwrap();
+        assert!(staged.is_empty());
+        assert_eq!(unstaged.len(), 1);
+        assert_eq!(unstaged[0].path, "new.txt");
+        assert_eq!(unstaged[0].status, FileState::New);
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn given_an_unstaged_file_when_staging_it_then_it_moves_to_staged() {
+        let (repo, dir) = temp_repo();
+        write_and_commit(&repo, &dir, "init.txt", "init", "init");
+        fs::write(dir.join("new.txt"), "content").unwrap();
+
+        stage_file(&repo, "new.txt").unwrap();
+        let (staged, unstaged) = get_status(&repo).unwrap();
+        assert_eq!(staged.len(), 1);
+        assert_eq!(staged[0].path, "new.txt");
+        assert!(unstaged.is_empty());
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn given_a_staged_file_when_unstaging_it_then_it_moves_back_to_unstaged() {
+        let (repo, dir) = temp_repo();
+        write_and_commit(&repo, &dir, "init.txt", "init", "init");
+        fs::write(dir.join("new.txt"), "content").unwrap();
+
+        stage_file(&repo, "new.txt").unwrap();
+        unstage_file(&repo, "new.txt").unwrap();
+        let (staged, unstaged) = get_status(&repo).unwrap();
+        assert!(staged.is_empty());
+        assert_eq!(unstaged.len(), 1);
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn given_a_committed_file_when_modifying_it_then_it_appears_as_unstaged_modified() {
+        let (repo, dir) = temp_repo();
+        write_and_commit(&repo, &dir, "file.txt", "original", "init");
+        fs::write(dir.join("file.txt"), "modified").unwrap();
+
+        let (staged, unstaged) = get_status(&repo).unwrap();
+        assert!(staged.is_empty());
+        assert_eq!(unstaged.len(), 1);
+        assert_eq!(unstaged[0].status, FileState::Modified);
+        cleanup(&dir);
+    }
+
+    // ── create_commit ───────────────────────────────────
+
+    #[test]
+    fn given_staged_files_when_committing_then_returns_a_7_char_sha() {
+        let (repo, dir) = temp_repo();
+        fs::write(dir.join("a.txt"), "data").unwrap();
+        stage_file(&repo, "a.txt").unwrap();
+        let sha = create_commit(&repo, "test commit").unwrap();
+        assert_eq!(sha.len(), 7);
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn given_staged_files_when_committing_then_staged_list_becomes_empty() {
+        let (repo, dir) = temp_repo();
+        fs::write(dir.join("a.txt"), "data").unwrap();
+        stage_file(&repo, "a.txt").unwrap();
+        create_commit(&repo, "commit it").unwrap();
+
+        let (staged, unstaged) = get_status(&repo).unwrap();
+        assert!(staged.is_empty());
+        assert!(unstaged.is_empty());
+        cleanup(&dir);
+    }
+
+    // ── branches ────────────────────────────────────────
+
+    #[test]
+    fn given_a_fresh_repo_when_listing_branches_then_only_main_exists_as_head() {
+        let (repo, dir) = temp_repo();
+        write_and_commit(&repo, &dir, "a.txt", "x", "init");
+        let branches = get_branches(&repo).unwrap();
+        assert_eq!(branches.len(), 1);
+        assert_eq!(branches[0].name, "main");
+        assert!(branches[0].is_head);
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn given_a_repo_when_creating_a_branch_then_it_appears_in_branch_list() {
+        let (repo, dir) = temp_repo();
+        write_and_commit(&repo, &dir, "a.txt", "x", "init");
+        create_branch(&repo, "feature").unwrap();
+
+        let branches = get_branches(&repo).unwrap();
+        let names: Vec<&str> = branches.iter().map(|b| b.name.as_str()).collect();
+        assert!(names.contains(&"feature"));
+        assert!(names.contains(&"main"));
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn given_a_new_branch_when_checking_it_out_then_current_branch_changes() {
+        let (repo, dir) = temp_repo();
+        write_and_commit(&repo, &dir, "a.txt", "x", "init");
+        create_branch(&repo, "dev").unwrap();
+        checkout_branch(&repo, "dev").unwrap();
+
+        assert_eq!(get_current_branch(&repo), "dev");
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn given_an_existing_branch_when_deleting_it_then_it_disappears_from_list() {
+        let (repo, dir) = temp_repo();
+        write_and_commit(&repo, &dir, "a.txt", "x", "init");
+        create_branch(&repo, "to-delete").unwrap();
+        delete_branch(&repo, "to-delete").unwrap();
+
+        let branches = get_branches(&repo).unwrap();
+        let names: Vec<&str> = branches.iter().map(|b| b.name.as_str()).collect();
+        assert!(!names.contains(&"to-delete"));
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn given_no_such_branch_when_deleting_then_it_returns_an_error() {
+        let (repo, dir) = temp_repo();
+        write_and_commit(&repo, &dir, "a.txt", "x", "init");
+        assert!(delete_branch(&repo, "nope").is_err());
+        cleanup(&dir);
+    }
+
+    // ── get_current_branch ──────────────────────────────
+
+    #[test]
+    fn given_an_empty_repo_when_getting_current_branch_then_returns_detached() {
+        let (repo, dir) = temp_repo();
+        assert_eq!(get_current_branch(&repo), "detached");
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn given_a_repo_with_commits_when_getting_current_branch_then_returns_a_branch_name() {
+        let (repo, dir) = temp_repo();
+        write_and_commit(&repo, &dir, "a.txt", "x", "init");
+        let branch = get_current_branch(&repo);
+        assert!(!branch.is_empty());
+        assert_ne!(branch, "detached");
+        cleanup(&dir);
+    }
+
+    // ── get_file_diff ───────────────────────────────────
+
+    #[test]
+    fn given_a_modified_file_when_getting_unstaged_diff_then_shows_added_lines() {
+        let (repo, dir) = temp_repo();
+        write_and_commit(&repo, &dir, "file.txt", "line1\n", "init");
+        fs::write(dir.join("file.txt"), "line1\nline2\n").unwrap();
+
+        let diff = get_file_diff(&repo, "file.txt", false).unwrap();
+        assert!(diff.contains("+line2"));
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn given_a_staged_new_file_when_getting_staged_diff_then_shows_its_content() {
+        let (repo, dir) = temp_repo();
+        write_and_commit(&repo, &dir, "init.txt", "x", "init");
+        fs::write(dir.join("new.txt"), "hello\n").unwrap();
+        stage_file(&repo, "new.txt").unwrap();
+
+        let diff = get_file_diff(&repo, "new.txt", true).unwrap();
+        assert!(diff.contains("+hello"));
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn given_no_changes_when_getting_diff_then_returns_no_diff_available() {
+        let (repo, dir) = temp_repo();
+        write_and_commit(&repo, &dir, "file.txt", "content", "init");
+
+        let diff = get_file_diff(&repo, "file.txt", false).unwrap();
+        assert_eq!(diff, "(no diff available)");
+        cleanup(&dir);
+    }
+
+    // ── get_remote_url / get_remote_status ──────────────
+
+    #[test]
+    fn given_no_remote_configured_when_getting_remote_url_then_returns_none() {
+        let (repo, dir) = temp_repo();
+        assert!(get_remote_url(&repo, None).is_none());
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn given_an_origin_remote_when_getting_its_url_then_returns_the_url() {
+        let (repo, dir) = temp_repo();
+        repo.remote("origin", "https://example.com/repo.git").unwrap();
+        let url = get_remote_url(&repo, Some("origin"));
+        assert_eq!(url.as_deref(), Some("https://example.com/repo.git"));
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn given_no_upstream_when_getting_remote_status_then_returns_zeros_and_no_name() {
+        let (repo, dir) = temp_repo();
+        write_and_commit(&repo, &dir, "a.txt", "x", "init");
+        let status = get_remote_status(&repo).unwrap();
+        assert_eq!(status.ahead, 0);
+        assert_eq!(status.behind, 0);
+        assert!(status.remote_name.is_none());
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn given_an_empty_repo_when_getting_remote_status_then_returns_default() {
+        let (repo, dir) = temp_repo();
+        let status = get_remote_status(&repo).unwrap();
+        assert_eq!(status.ahead, 0);
+        assert_eq!(status.behind, 0);
+        cleanup(&dir);
+    }
+
+    // ── parse_remote_name ───────────────────────────────
+
+    #[test]
+    fn given_origin_main_when_parsing_remote_name_then_returns_origin() {
+        assert_eq!(parse_remote_name("origin/main"), "origin");
+    }
+
+    #[test]
+    fn given_a_name_without_slash_when_parsing_then_returns_the_whole_string() {
+        assert_eq!(parse_remote_name("origin"), "origin");
+    }
+
+    #[test]
+    fn given_upstream_develop_when_parsing_remote_name_then_returns_upstream() {
+        assert_eq!(parse_remote_name("upstream/develop"), "upstream");
+    }
+
+    // ── compute_graph_lanes ─────────────────────────────
+
+    #[test]
+    fn given_no_commits_when_computing_graph_lanes_then_returns_empty() {
+        let result = compute_graph_lanes(&[]);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn given_a_linear_history_when_computing_lanes_then_all_commits_share_one_lane() {
+        let commits = vec![
+            CommitInfo {
+                id: "aaa".into(), id_full: String::new(), message: String::new(),
+                author: String::new(), time: 0, parents: vec!["bbb".into()],
+                branches: vec![], is_head: true,
+            },
+            CommitInfo {
+                id: "bbb".into(), id_full: String::new(), message: String::new(),
+                author: String::new(), time: 0, parents: vec!["ccc".into()],
+                branches: vec![], is_head: false,
+            },
+            CommitInfo {
+                id: "ccc".into(), id_full: String::new(), message: String::new(),
+                author: String::new(), time: 0, parents: vec![],
+                branches: vec![], is_head: false,
+            },
+        ];
+
+        let lanes = compute_graph_lanes(&commits);
+        assert_eq!(lanes.len(), 3);
+        assert_eq!(lanes[0].lane, lanes[1].lane);
+        assert_eq!(lanes[1].lane, lanes[2].lane);
+        assert!(lanes[0].merge_from.is_none());
+        assert!(lanes[1].merge_from.is_none());
+    }
+
+    #[test]
+    fn given_a_merge_commit_when_computing_lanes_then_parents_are_on_different_lanes() {
+        let commits = vec![
+            CommitInfo {
+                id: "mmm".into(), id_full: String::new(), message: String::new(),
+                author: String::new(), time: 0, parents: vec!["aaa".into(), "bbb".into()],
+                branches: vec![], is_head: true,
+            },
+            CommitInfo {
+                id: "aaa".into(), id_full: String::new(), message: String::new(),
+                author: String::new(), time: 0, parents: vec![],
+                branches: vec![], is_head: false,
+            },
+            CommitInfo {
+                id: "bbb".into(), id_full: String::new(), message: String::new(),
+                author: String::new(), time: 0, parents: vec![],
+                branches: vec![], is_head: false,
+            },
+        ];
+
+        let lanes = compute_graph_lanes(&commits);
+        assert_eq!(lanes.len(), 3);
+        assert!(lanes[0].merge_from.is_some());
+        assert_ne!(lanes[1].lane, lanes[2].lane);
+    }
+
+    // ── branch sorting ──────────────────────────────────
+
+    #[test]
+    fn given_multiple_branches_when_listing_then_head_branch_is_first() {
+        let (repo, dir) = temp_repo();
+        write_and_commit(&repo, &dir, "a.txt", "x", "init");
+        create_branch(&repo, "alpha").unwrap();
+        create_branch(&repo, "zebra").unwrap();
+
+        let branches = get_branches(&repo).unwrap();
+        assert!(branches[0].is_head, "HEAD branch should be first");
+        cleanup(&dir);
+    }
+}
+
