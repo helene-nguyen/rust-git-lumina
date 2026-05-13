@@ -136,3 +136,5 @@ Pull performs a **fast-forward only** merge. If the branch has diverged, it will
 | `git2`      | Rust bindings for libgit2       |
 | `anyhow`    | Error handling                  |
 | `chrono`    | Timestamp formatting            |
+
+### Changes for display UI terminal
