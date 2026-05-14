@@ -360,7 +360,7 @@ fn draw_tab_bar(f: &mut Frame, app: &mut App, area: Rect) {
 fn draw_status_bar(f: &mut Frame, app: &App, area: Rect) {
     let hints = match app.input_mode {
         InputMode::Editing => "ESC cancel │ Enter confirm",
-        InputMode::Normal => "? help │ q quit │ P push │ L pull │ F fetch │ ↑↓ nav",
+        InputMode::Normal => "? help │ q quit │ P push │ L pull │ F fetch │ m select-mode │ ↑↓ nav",
     };
 
     let auto_tag = if app.auto_refresh {
@@ -408,6 +408,25 @@ fn draw_commit_list(f: &mut Frame, app: &mut App, area: Rect) {
         .unwrap_or(1)
         .min(6); // cap at 6 lanes for display
 
+    // Map each column → owning branch name (if any), so column colours can
+    // come from the branch palette instead of the lane-index palette. Falls
+    // back to GRAPH_COLORS for empty columns.
+    let col_branch: Vec<Option<String>> = (0..max_lanes)
+        .map(|c| {
+            app.graph_lanes
+                .iter()
+                .find(|l| l.lane == c)
+                .and_then(|l| l.owning_branch.clone())
+        })
+        .collect();
+    let column_color = |c: usize| -> Color {
+        col_branch
+            .get(c)
+            .and_then(|opt| opt.as_deref())
+            .map(branch_badge_color)
+            .unwrap_or_else(|| colors::GRAPH_COLORS[c % colors::GRAPH_COLORS.len()])
+    };
+
     let items: Vec<ListItem> = app
         .commits
         .iter()
@@ -416,26 +435,30 @@ fn draw_commit_list(f: &mut Frame, app: &mut App, area: Rect) {
             let sel = i == app.commit_selected;
             let lane_info = app.graph_lanes.get(i);
 
-            // The lane colour for this row — used for the node, the selection bar,
-            // and the SHA tint when selected. Mirrors `GC[commit.color]` in the mockup.
+            // Row colour: hash-stable colour of the owning branch, falling back
+            // to the lane palette if the commit isn't owned by any local branch.
             let my_color = lane_info
-                .map(|info| {
-                    let l = info.lane.min(max_lanes - 1);
-                    colors::GRAPH_COLORS[l % colors::GRAPH_COLORS.len()]
+                .map(|info| match &info.owning_branch {
+                    Some(b) => branch_badge_color(b),
+                    None => {
+                        let l = info.lane.min(max_lanes - 1);
+                        colors::GRAPH_COLORS[l % colors::GRAPH_COLORS.len()]
+                    }
                 })
                 .unwrap_or(colors::ACCENT);
 
             // ── Connector row above the dot ──
-            // For each lane active in the previous commit, draw `╎` in the lane
-            // colour so commits on the same branch are visibly chained between
-            // their dots. The first row has no previous commit → fully blank,
-            // which also serves as the leading padding.
+            // `╎` at column c only if c is active at BOTH this row and the
+            // previous row — i.e. the lane continues through the connector
+            // instead of starting/ending on it.
             let mut connector_spans: Vec<Span> = Vec::new();
             if sel {
                 connector_spans.push(Span::styled("▌", Style::default().fg(my_color)));
             } else {
                 connector_spans.push(Span::raw(" "));
             }
+            let curr_active: Option<&[bool]> =
+                lane_info.map(|l| l.active_lanes.as_slice());
             let prev_active: Option<&[bool]> = if i == 0 {
                 None
             } else {
@@ -444,13 +467,15 @@ fn draw_commit_list(f: &mut Frame, app: &mut App, area: Rect) {
                     .map(|p| p.active_lanes.as_slice())
             };
             for col in 0..max_lanes {
-                let col_color = colors::GRAPH_COLORS[col % colors::GRAPH_COLORS.len()];
-                let active = prev_active
+                let is_active_curr = curr_active
                     .map(|a| col < a.len() && a[col])
                     .unwrap_or(false);
-                if active {
+                let is_active_prev = prev_active
+                    .map(|a| col < a.len() && a[col])
+                    .unwrap_or(false);
+                if is_active_curr && is_active_prev {
                     connector_spans
-                        .push(Span::styled("╎  ", Style::default().fg(col_color)));
+                        .push(Span::styled("╎  ", Style::default().fg(column_color(col))));
                 } else {
                     connector_spans.push(Span::raw("   "));
                 }
@@ -473,21 +498,9 @@ fn draw_commit_list(f: &mut Frame, app: &mut App, area: Rect) {
 
                 // Each lane is rendered as 3 cells wide so branches read as
                 // distinct columns: 1 cell for the glyph + 2 cells of spacing.
-                //
-                // On the dot row, when this commit isn't on the main lane
-                // (lane 0), we blank out column 0 so the feature-branch dot
-                // doesn't sit next to main's continuing vertical bar. The
-                // connector rows above/below still draw `│` at lane 0 for
-                // visual continuity of the main branch.
-                let suppress_main_lane = my_lane != 0;
                 for col in 0..max_lanes {
-                    let col_color = colors::GRAPH_COLORS[col % colors::GRAPH_COLORS.len()];
+                    let col_color = column_color(col);
                     let is_active = col < info.active_lanes.len() && info.active_lanes[col];
-
-                    if col == 0 && suppress_main_lane && merge_to != Some(0) {
-                        graph_spans.push(Span::raw("   "));
-                        continue;
-                    }
 
                     if col == my_lane {
                         // Commit node — hollow ring for merges, solid dot for regular.
@@ -1274,6 +1287,7 @@ fn draw_help_popup(f: &mut Frame) {
         ("F", "Fetch from remote"),
         ("PgUp/PgDn", "Scroll diff"),
         ("Mouse", "Click & scroll"),
+        ("m", "Toggle mouse capture (select/copy)"),
         ("r", "Refresh"),
         ("q", "Quit"),
     ];

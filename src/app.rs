@@ -96,6 +96,10 @@ pub struct App {
 
     // Mouse click region tracking — set during rendering
     pub click_regions: Vec<ClickRegion>,
+
+    // When false, mouse capture is released so the terminal can drag-select
+    // text for copy. Toggled via `m`.
+    pub mouse_capture: bool,
 }
 
 /// A clickable region in the terminal, recorded during draw
@@ -157,16 +161,29 @@ impl App {
             auto_refresh_interval: Duration::from_secs(2),
             last_refresh: Instant::now(),
             click_regions: Vec::new(),
+            mouse_capture: true,
         };
         app.refresh_all()?;
         Ok(app)
     }
 
+    /// Toggle mouse capture so users can drag-select terminal text to copy.
+    /// The loop in `lib.rs` reconciles this with the actual terminal state.
+    pub fn toggle_mouse_capture(&mut self) {
+        self.mouse_capture = !self.mouse_capture;
+        self.status_msg = if self.mouse_capture {
+            "Mouse capture ON — clicks routed to UI".to_string()
+        } else {
+            "Mouse capture OFF — drag to select/copy text".to_string()
+        };
+    }
+
     /// Refresh all data from the repository
     pub fn refresh_all(&mut self) -> Result<()> {
+        // Branches first — refresh_commits needs them to assign lanes by branch.
+        self.refresh_branches()?;
         self.refresh_commits()?;
         self.refresh_files()?;
-        self.refresh_branches()?;
         self.refresh_remote_status();
         self.current_branch = git_ops::get_current_branch(&self.repo);
         self.last_refresh = Instant::now();
@@ -193,7 +210,7 @@ impl App {
 
     pub fn refresh_commits(&mut self) -> Result<()> {
         self.commits = git_ops::get_commits(&self.repo, 200)?;
-        self.graph_lanes = git_ops::compute_graph_lanes(&self.commits);
+        self.graph_lanes = git_ops::compute_branch_lanes(&self.commits, &self.branches);
         if self.commit_selected >= self.commits.len() {
             self.commit_selected = self.commits.len().saturating_sub(1);
         }

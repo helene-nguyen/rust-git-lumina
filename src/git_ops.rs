@@ -562,6 +562,10 @@ pub struct GraphLane {
     pub lane: usize,
     pub active_lanes: Vec<bool>,
     pub merge_from: Option<usize>,
+    /// When the lane was assigned by `compute_branch_lanes`, this is the name
+    /// of the local branch that owns the commit. `None` for the DAG-based
+    /// `compute_graph_lanes`.
+    pub owning_branch: Option<String>,
 }
 
 /// Compute graph lane assignments for a list of commits (topological order)
@@ -615,6 +619,157 @@ pub fn compute_graph_lanes(commits: &[CommitInfo]) -> Vec<GraphLane> {
             lane: my_lane,
             active_lanes,
             merge_from,
+            owning_branch: None,
+        });
+    }
+
+    result
+}
+
+/// Assign each commit to the column of the closest local branch tip (BFS over
+/// parent edges, ties broken by lower column index). Returns one `GraphLane`
+/// per commit, with `lane` = owning branch column, `owning_branch` = the name
+/// of that branch, and `merge_from` = second-parent's owning column for merge
+/// commits. `active_lanes[c]` is true at row i iff column `c` has at least one
+/// owned commit between the first and last owned row inclusive — i.e. the
+/// column shows a continuous track over its lifetime.
+pub fn compute_branch_lanes(
+    commits: &[CommitInfo],
+    branches: &[BranchInfo],
+) -> Vec<GraphLane> {
+    use std::collections::{HashMap, VecDeque};
+
+    // Local branches only. main/master pinned first, then alphabetical, so
+    // the layout doesn't shift with checkouts.
+    let mut locals: Vec<&BranchInfo> = branches.iter().filter(|b| !b.is_remote).collect();
+    locals.sort_by(|a, b| {
+        let pri = |n: &str| match n {
+            "main" => 0,
+            "master" => 1,
+            _ => 2,
+        };
+        pri(&a.name)
+            .cmp(&pri(&b.name))
+            .then_with(|| a.name.cmp(&b.name))
+    });
+
+    let num_cols = locals.len();
+    let col_of: HashMap<&str, usize> = locals
+        .iter()
+        .enumerate()
+        .map(|(i, b)| (b.name.as_str(), i))
+        .collect();
+
+    // Lookup: short SHA → commit index.
+    let by_id: HashMap<&str, usize> = commits
+        .iter()
+        .enumerate()
+        .map(|(i, c)| (c.id.as_str(), i))
+        .collect();
+
+    // BFS seeds: each local tip is a source for its own column. Each remote
+    // tracking branch (`origin/X`) is also a source for the local `X`'s column
+    // — so commits only reachable via the remote (e.g. unfetched-but-known
+    // ancestors of `origin/main`) still land in `main`'s column instead of
+    // bleeding into whichever feature branch happens to reach them next.
+    let n = commits.len();
+    let mut best: Vec<Option<(usize, usize, String)>> = vec![None; n];
+    let mut queue: VecDeque<(usize, usize, usize, String)> = VecDeque::new();
+    for b in &locals {
+        if let Some(&idx) = by_id.get(b.commit_id.as_str()) {
+            let col = col_of[b.name.as_str()];
+            queue.push_back((idx, 0, col, b.name.clone()));
+        }
+        // Also seed from the corresponding remote tip, if any. Prefer the
+        // explicit upstream link; fall back to a `origin/<name>` name match.
+        let remote_name = b
+            .upstream
+            .clone()
+            .or_else(|| Some(format!("origin/{}", b.name)));
+        if let Some(rname) = remote_name {
+            if let Some(remote) = branches
+                .iter()
+                .find(|r| r.is_remote && r.name == rname)
+            {
+                if let Some(&idx) = by_id.get(remote.commit_id.as_str()) {
+                    let col = col_of[b.name.as_str()];
+                    queue.push_back((idx, 0, col, b.name.clone()));
+                }
+            }
+        }
+    }
+    while let Some((idx, dist, col, name)) = queue.pop_front() {
+        let improve = match &best[idx] {
+            None => true,
+            Some((d, c, _)) => dist < *d || (dist == *d && col < *c),
+        };
+        if !improve {
+            continue;
+        }
+        best[idx] = Some((dist, col, name.clone()));
+        for parent in &commits[idx].parents {
+            if let Some(&pidx) = by_id.get(parent.as_str()) {
+                queue.push_back((pidx, dist + 1, col, name.clone()));
+            }
+        }
+    }
+
+    // First/last "endpoint" row per column — owned commits plus merge rows
+    // whose second parent lands in that column. Including merge rows lets the
+    // column stay active up to the row where its `╮`/`╭` connector lives, so
+    // the `╎` chain reaches all the way from the merge down to the column's
+    // first owned commit.
+    let mut first_row: Vec<Option<usize>> = vec![None; num_cols];
+    let mut last_row: Vec<Option<usize>> = vec![None; num_cols];
+    let bump = |c: usize, i: usize, first: &mut Vec<Option<usize>>, last: &mut Vec<Option<usize>>| {
+        if first[c].map_or(true, |f| i < f) {
+            first[c] = Some(i);
+        }
+        if last[c].map_or(true, |l| i > l) {
+            last[c] = Some(i);
+        }
+    };
+    for (i, slot) in best.iter().enumerate() {
+        if let Some((_, c, _)) = slot {
+            bump(*c, i, &mut first_row, &mut last_row);
+        }
+        let commit = &commits[i];
+        if commit.parents.len() >= 2 {
+            if let Some(&pidx) = by_id.get(commit.parents[1].as_str()) {
+                if let Some((_, c, _)) = &best[pidx] {
+                    bump(*c, i, &mut first_row, &mut last_row);
+                }
+            }
+        }
+    }
+
+    let mut result = Vec::with_capacity(n);
+    for (i, commit) in commits.iter().enumerate() {
+        let (lane, name) = best[i]
+            .as_ref()
+            .map(|(_, c, n)| (*c, Some(n.clone())))
+            .unwrap_or((0, None));
+
+        let merge_from = if commit.parents.len() >= 2 {
+            by_id
+                .get(commit.parents[1].as_str())
+                .and_then(|&pidx| best[pidx].as_ref().map(|(_, c, _)| *c))
+        } else {
+            None
+        };
+
+        let active_lanes: Vec<bool> = (0..num_cols)
+            .map(|c| match (first_row[c], last_row[c]) {
+                (Some(f), Some(l)) => i >= f && i <= l,
+                _ => false,
+            })
+            .collect();
+
+        result.push(GraphLane {
+            lane,
+            active_lanes,
+            merge_from,
+            owning_branch: name,
         });
     }
 

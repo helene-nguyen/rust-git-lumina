@@ -48,7 +48,18 @@ fn run_app(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     app: &mut App,
 ) -> Result<()> {
+    // Mirrors `app.mouse_capture` so we only toggle the terminal when it changes.
+    let mut capture_on = app.mouse_capture;
     loop {
+        if app.mouse_capture != capture_on {
+            if app.mouse_capture {
+                execute!(io::stdout(), EnableMouseCapture)?;
+            } else {
+                execute!(io::stdout(), DisableMouseCapture)?;
+            }
+            capture_on = app.mouse_capture;
+        }
+
         terminal.draw(|f| ui::draw(f, app))?;
 
         if event::poll(Duration::from_millis(250))? {
@@ -143,6 +154,8 @@ fn handle_normal_input(app: &mut App, key: KeyCode) {
         }
 
         KeyCode::Char('a') => app.toggle_auto_refresh(),
+
+        KeyCode::Char('m') => app.toggle_mouse_capture(),
 
         KeyCode::Char('?') => app.show_help(),
 
