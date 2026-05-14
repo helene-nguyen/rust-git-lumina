@@ -743,23 +743,46 @@ pub fn compute_branch_lanes(
         }
     }
 
+    // Compact: drop columns that own no commits (e.g. a branch whose tip is
+    // shared with a higher-priority branch — the BFS tie-break gave the SHA
+    // to the higher-priority column, leaving this one empty). The remap keeps
+    // relative ordering so main stays at the left.
+    let used: Vec<bool> = (0..num_cols).map(|c| first_row[c].is_some()).collect();
+    let mut remap: Vec<usize> = vec![0; num_cols];
+    let mut compact = 0usize;
+    for c in 0..num_cols {
+        remap[c] = compact;
+        if used[c] {
+            compact += 1;
+        }
+    }
+    let compact_first: Vec<Option<usize>> = (0..num_cols)
+        .filter(|&c| used[c])
+        .map(|c| first_row[c])
+        .collect();
+    let compact_last: Vec<Option<usize>> = (0..num_cols)
+        .filter(|&c| used[c])
+        .map(|c| last_row[c])
+        .collect();
+    let new_num_cols = compact;
+
     let mut result = Vec::with_capacity(n);
     for (i, commit) in commits.iter().enumerate() {
         let (lane, name) = best[i]
             .as_ref()
-            .map(|(_, c, n)| (*c, Some(n.clone())))
+            .map(|(_, c, n)| (remap[*c], Some(n.clone())))
             .unwrap_or((0, None));
 
         let merge_from = if commit.parents.len() >= 2 {
             by_id
                 .get(commit.parents[1].as_str())
-                .and_then(|&pidx| best[pidx].as_ref().map(|(_, c, _)| *c))
+                .and_then(|&pidx| best[pidx].as_ref().map(|(_, c, _)| remap[*c]))
         } else {
             None
         };
 
-        let active_lanes: Vec<bool> = (0..num_cols)
-            .map(|c| match (first_row[c], last_row[c]) {
+        let active_lanes: Vec<bool> = (0..new_num_cols)
+            .map(|c| match (compact_first[c], compact_last[c]) {
                 (Some(f), Some(l)) => i >= f && i <= l,
                 _ => false,
             })
