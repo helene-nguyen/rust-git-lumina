@@ -79,7 +79,7 @@ fn relative_time(timestamp: i64) -> String {
         }
         _ => {
             let w = diff / 604800;
-            format!("{} wk{} ago", w, if w == 1 { "" } else { "s" })
+            format!("{} week{} ago", w, if w == 1 { "" } else { "s" })
         }
     }
 }
@@ -282,19 +282,20 @@ fn draw_tab_bar(f: &mut Frame, app: &mut App, area: Rect) {
 
     for (i, name) in tab_names.iter().enumerate() {
         let is_active = app.tab.index() == i;
+        let (num, label) = name.split_once(' ').unwrap_or(("", name));
         if is_active {
+            let base = Style::default()
+                .fg(colors::ACCENT_BRIGHT)
+                .bg(colors::BG_SURFACE);
+            spans.push(Span::styled(format!(" {} ", num), base.add_modifier(Modifier::UNDERLINED), ));
             spans.push(Span::styled(
-                format!(" {} ", name),
-                Style::default()
-                    .fg(colors::ACCENT_BRIGHT)
-                    .bg(colors::BG_SURFACE)
-                    .add_modifier(Modifier::BOLD),
+                format!("{} ", label),
+                base.add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
             ));
         } else {
-            spans.push(Span::styled(
-                format!(" {} ", name),
-                Style::default().fg(colors::TEXT_MUTED),
-            ));
+            let base = Style::default().fg(colors::TEXT_MUTED);
+            spans.push(Span::styled(format!(" {} ", num), base));
+            spans.push(Span::styled(format!("{} ", label), base));
         }
         spans.push(Span::raw("  "));
     }
@@ -391,76 +392,110 @@ fn draw_commit_list(f: &mut Frame, app: &mut App, area: Rect) {
             let sel = i == app.commit_selected;
             let lane_info = app.graph_lanes.get(i);
 
+            // The lane colour for this row — used for the node, the selection bar,
+            // and the SHA tint when selected. Mirrors `GC[commit.color]` in the mockup.
+            let my_color = lane_info
+                .map(|info| {
+                    let l = info.lane.min(max_lanes - 1);
+                    colors::GRAPH_COLORS[l % colors::GRAPH_COLORS.len()]
+                })
+                .unwrap_or(colors::ACCENT);
+
             // Build graph prefix
             let mut graph_spans: Vec<Span> = Vec::new();
+
+            // Selection bar in the lane colour (mockup: borderLeft: 2px solid {c})
+            if sel {
+                graph_spans.push(Span::styled("▌", Style::default().fg(my_color)));
+            } else {
+                graph_spans.push(Span::raw(" "));
+            }
+
             if let Some(info) = lane_info {
                 let my_lane = info.lane.min(max_lanes - 1);
                 let merge_to = info.merge_from.map(|m| m.min(max_lanes - 1));
+                let is_merge = info.merge_from.is_some();
 
+                // Each lane is rendered as 3 cells wide so branches read as
+                // distinct columns: 1 cell for the glyph + 2 cells of spacing.
+                //
+                // On the dot row, when this commit isn't on the main lane
+                // (lane 0), we blank out column 0 so the feature-branch dot
+                // doesn't sit next to main's continuing vertical bar. The
+                // connector rows above/below still draw `│` at lane 0 for
+                // visual continuity of the main branch.
+                let suppress_main_lane = my_lane != 0;
                 for col in 0..max_lanes {
                     let col_color = colors::GRAPH_COLORS[col % colors::GRAPH_COLORS.len()];
-                    let my_color = colors::GRAPH_COLORS[my_lane % colors::GRAPH_COLORS.len()];
                     let is_active = col < info.active_lanes.len() && info.active_lanes[col];
 
+                    if col == 0 && suppress_main_lane && merge_to != Some(0) {
+                        graph_spans.push(Span::raw("   "));
+                        continue;
+                    }
+
                     if col == my_lane {
-                        if let Some(mt) = merge_to {
-                            if mt > my_lane {
-                                graph_spans.push(Span::styled(
-                                    "●─",
-                                    Style::default().fg(my_color),
-                                ));
-                            } else {
-                                graph_spans.push(Span::styled(
-                                    "● ",
-                                    Style::default().fg(my_color),
-                                ));
-                            }
-                        } else {
-                            let node = if sel { "◉ " } else { "● " };
+                        // Commit node — hollow ring for merges, solid dot for regular.
+                        // Selection emphasises via BOLD on the node colour rather than
+                        // swapping the shape.
+                        let glyph = if is_merge { "◉" } else { "●" };
+                        let trailing = match merge_to {
+                            Some(mt) if mt > my_lane => "──",
+                            _ => "  ",
+                        };
+                        let mut node_style = Style::default().fg(my_color);
+                        if sel {
+                            node_style = node_style.add_modifier(Modifier::BOLD);
+                        }
+                        graph_spans.push(Span::styled(
+                            format!("{}{}", glyph, trailing),
+                            node_style,
+                        ));
+                    } else if let Some(mt) = merge_to {
+                        let between_right = mt > my_lane && col > my_lane && col < mt;
+                        let between_left = mt < my_lane && col > mt && col < my_lane;
+                        if between_right || between_left {
+                            // Horizontal segment of the merge connector
                             graph_spans.push(Span::styled(
-                                node,
+                                "───",
                                 Style::default().fg(my_color),
                             ));
-                        }
-                    } else if let Some(mt) = merge_to {
-                        if col > my_lane && col < mt {
-                            graph_spans.push(Span::styled(
-                                "──",
-                                Style::default().fg(colors::GRAPH_COLORS[my_lane % colors::GRAPH_COLORS.len()]),
-                            ));
                         } else if col == mt {
+                            // Corner where connector turns down into the second-parent lane
+                            let corner = if mt > my_lane { "╮  " } else { "╭──" };
                             graph_spans.push(Span::styled(
-                                "┐ ",
-                                Style::default().fg(col_color),
+                                corner,
+                                Style::default().fg(my_color),
                             ));
                         } else if is_active {
                             graph_spans.push(Span::styled(
-                                "│ ",
+                                "   ",
                                 Style::default().fg(col_color).add_modifier(Modifier::DIM),
                             ));
                         } else {
-                            graph_spans.push(Span::raw("  "));
+                            graph_spans.push(Span::raw("   "));
                         }
                     } else if is_active {
                         graph_spans.push(Span::styled(
-                            "│ ",
+                            "   ",
                             Style::default().fg(col_color).add_modifier(Modifier::DIM),
                         ));
                     } else {
-                        graph_spans.push(Span::raw("  "));
+                        graph_spans.push(Span::raw("   "));
                     }
                 }
             } else {
-                graph_spans.push(Span::styled("● ", Style::default().fg(colors::ACCENT)));
+                graph_spans.push(Span::styled("●  ", Style::default().fg(colors::ACCENT)));
                 for _ in 1..max_lanes {
-                    graph_spans.push(Span::raw("  "));
+                    graph_spans.push(Span::raw("   "));
                 }
             }
 
-            // SHA
-            let sha_color = if sel { colors::ACCENT } else { colors::TEXT_DIM };
+            // SHA — tints to the lane colour when selected (mockup: sel ? c : T.textDim).
+            // Extra padding on both sides so the hash has visual breathing room.
+            let sha_color = if sel { my_color } else { colors::TEXT_DIM };
             graph_spans.push(Span::styled(
-                format!("{} ", commit.id),
+                format!("  {}   ", commit.id),
                 Style::default().fg(sha_color),
             ));
 
@@ -474,20 +509,21 @@ fn draw_commit_list(f: &mut Frame, app: &mut App, area: Rect) {
                 } else {
                     (colors::GREEN, colors::GREEN_BG)
                 };
-                let prefix = if commit.is_head { "● " } else { "" };
                 graph_spans.push(Span::styled(
-                    format!(" {}{} ", prefix, b),
+                    format!(" ● {} ", b),
                     Style::default().fg(fg).bg(bg).add_modifier(Modifier::BOLD),
                 ));
                 graph_spans.push(Span::raw(" "));
             }
 
-            // Commit message
+            // Commit message — bolder on selection (mockup: fontWeight 500 vs 400)
             let msg_color = if sel { colors::TEXT } else { colors::TEXT_SECONDARY };
-            graph_spans.push(Span::styled(
-                &commit.message,
-                Style::default().fg(msg_color),
-            ));
+            let msg_style = if sel {
+                Style::default().fg(msg_color).add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(msg_color)
+            };
+            graph_spans.push(Span::styled(&commit.message, msg_style));
 
             // Right side: author · time
             let time_str = relative_time(commit.time);
@@ -503,19 +539,35 @@ fn draw_commit_list(f: &mut Frame, app: &mut App, area: Rect) {
                 Style::default()
             };
 
+            // Single-line item: just the dot/info row.
             ListItem::new(Line::from(graph_spans)).style(row_style)
         })
         .collect();
 
+    // Leading blank row at the top of the list so the first commit isn't
+    // glued to the panel border.
+    let mut items_with_lead: Vec<ListItem> = Vec::with_capacity(items.len() + 1);
+    items_with_lead.push(ListItem::new(Line::raw("")));
+    items_with_lead.extend(items);
+
     let title = format!("Commit Graph ({})", app.commits.len());
     let block = styled_block(&title, true);
-    let list = List::new(items).block(block);
+    let list = List::new(items_with_lead).block(block);
     f.render_widget(list, area);
 
-    // Click regions
+    // Click regions — each commit occupies 1 row, offset by the leading blank.
+    const ITEM_ROWS: u16 = 1;
+    const LEAD_ROWS: u16 = 1;
     let inner = inner_rect(area);
-    for i in 0..app.commits.len().min(inner.height as usize) {
-        let row = Rect::new(inner.x, inner.y + i as u16, inner.width, 1);
+    let max_items = (inner.height.saturating_sub(LEAD_ROWS) as usize) / ITEM_ROWS as usize + 1;
+    for i in 0..app.commits.len().min(max_items) {
+        let row_y = inner.y + LEAD_ROWS + (i as u16) * ITEM_ROWS;
+        if row_y >= inner.y + inner.height {
+            break;
+        }
+        let remaining = (inner.y + inner.height).saturating_sub(row_y);
+        let height = remaining.min(ITEM_ROWS);
+        let row = Rect::new(inner.x, row_y, inner.width, height);
         let idx = app.commit_scroll + i;
         if idx < app.commits.len() {
             app.register_click_region(row, ClickAction::SelectCommit(idx));
