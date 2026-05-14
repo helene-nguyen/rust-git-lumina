@@ -435,8 +435,9 @@ fn draw_commit_list(f: &mut Frame, app: &mut App, area: Rect) {
                     }
 
                     if col == my_lane {
-                        // Commit node — ◉ for merges, ● for regular. Selection emphasises
-                        // via BOLD on the node colour rather than swapping the shape.
+                        // Commit node — hollow ring for merges, solid dot for regular.
+                        // Selection emphasises via BOLD on the node colour rather than
+                        // swapping the shape.
                         let glyph = if is_merge { "◉" } else { "●" };
                         let trailing = match merge_to {
                             Some(mt) if mt > my_lane => "──",
