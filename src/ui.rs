@@ -50,7 +50,6 @@ mod colors {
 
     // Badge backgrounds (pre-blended with dark bg)
     pub const GREEN_BG: Color = Color::Rgb(18, 32, 25);
-    pub const YELLOW_BG: Color = Color::Rgb(35, 30, 18);
     pub const ACCENT_BG: Color = Color::Rgb(22, 16, 42);
 
     // Graph lane colors
@@ -81,6 +80,31 @@ fn relative_time(timestamp: i64) -> String {
             let w = diff / 604800;
             format!("{} week{} ago", w, if w == 1 { "" } else { "s" })
         }
+    }
+}
+
+// Stable per-branch color: sum of bytes mod palette length. `origin/foo` and
+// `foo` collapse to the same hue so a branch and its remote share a colour.
+fn branch_badge_color(name: &str) -> Color {
+    let key = name.strip_prefix("origin/").unwrap_or(name);
+    const PALETTE: [Color; 6] = [
+        colors::CYAN,
+        colors::PINK,
+        colors::ORANGE,
+        colors::GREEN,
+        colors::YELLOW,
+        colors::ACCENT_BRIGHT,
+    ];
+    let h: usize = key.bytes().map(|b| b as usize).sum();
+    PALETTE[h % PALETTE.len()]
+}
+
+// Derive a darkened background from a foreground colour by scaling channels
+// down to ~12% — matches the existing *_BG constants closely enough.
+fn dim_to_bg(c: Color) -> Color {
+    match c {
+        Color::Rgb(r, g, b) => Color::Rgb(r / 8, g / 8, b / 8),
+        other => other,
     }
 }
 
@@ -401,7 +425,38 @@ fn draw_commit_list(f: &mut Frame, app: &mut App, area: Rect) {
                 })
                 .unwrap_or(colors::ACCENT);
 
-            // Build graph prefix
+            // ── Connector row above the dot ──
+            // For each lane active in the previous commit, draw `╎` in the lane
+            // colour so commits on the same branch are visibly chained between
+            // their dots. The first row has no previous commit → fully blank,
+            // which also serves as the leading padding.
+            let mut connector_spans: Vec<Span> = Vec::new();
+            if sel {
+                connector_spans.push(Span::styled("▌", Style::default().fg(my_color)));
+            } else {
+                connector_spans.push(Span::raw(" "));
+            }
+            let prev_active: Option<&[bool]> = if i == 0 {
+                None
+            } else {
+                app.graph_lanes
+                    .get(i - 1)
+                    .map(|p| p.active_lanes.as_slice())
+            };
+            for col in 0..max_lanes {
+                let col_color = colors::GRAPH_COLORS[col % colors::GRAPH_COLORS.len()];
+                let active = prev_active
+                    .map(|a| col < a.len() && a[col])
+                    .unwrap_or(false);
+                if active {
+                    connector_spans
+                        .push(Span::styled("╎  ", Style::default().fg(col_color)));
+                } else {
+                    connector_spans.push(Span::raw("   "));
+                }
+            }
+
+            // ── Dot row (the existing layout) ──
             let mut graph_spans: Vec<Span> = Vec::new();
 
             // Selection bar in the lane colour (mockup: borderLeft: 2px solid {c})
@@ -468,17 +523,21 @@ fn draw_commit_list(f: &mut Frame, app: &mut App, area: Rect) {
                                 Style::default().fg(my_color),
                             ));
                         } else if is_active {
+                            // Background lane: keep the column visible with `╎`
+                            // so each open branch reads as its own persistent
+                            // column even on commit rows that aren't on it.
                             graph_spans.push(Span::styled(
-                                "   ",
-                                Style::default().fg(col_color).add_modifier(Modifier::DIM),
+                                "╎  ",
+                                Style::default().fg(col_color),
                             ));
                         } else {
                             graph_spans.push(Span::raw("   "));
                         }
                     } else if is_active {
+                        // Background lane: persistent column marker.
                         graph_spans.push(Span::styled(
-                            "   ",
-                            Style::default().fg(col_color).add_modifier(Modifier::DIM),
+                            "╎  ",
+                            Style::default().fg(col_color),
                         ));
                     } else {
                         graph_spans.push(Span::raw("   "));
@@ -499,18 +558,16 @@ fn draw_commit_list(f: &mut Frame, app: &mut App, area: Rect) {
                 Style::default().fg(sha_color),
             ));
 
-            // Branch badges
+            // Branch badges — each branch gets its own stable colour. `origin/foo`
+            // and `foo` share a hue. The currently checked-out branch is marked
+            // with `★` instead of `●`.
             for b in &commit.branches {
-                let is_origin = b.starts_with("origin/");
-                let (fg, bg) = if commit.is_head {
-                    (colors::YELLOW, colors::YELLOW_BG)
-                } else if is_origin {
-                    (colors::ACCENT_BRIGHT, colors::ACCENT_BG)
-                } else {
-                    (colors::GREEN, colors::GREEN_BG)
-                };
+                let fg = branch_badge_color(b);
+                let bg = dim_to_bg(fg);
+                let is_active = b == &app.current_branch;
+                let prefix = if is_active { "★" } else { "●" };
                 graph_spans.push(Span::styled(
-                    format!(" ● {} ", b),
+                    format!(" {} {} ", prefix, b),
                     Style::default().fg(fg).bg(bg).add_modifier(Modifier::BOLD),
                 ));
                 graph_spans.push(Span::raw(" "));
@@ -539,29 +596,26 @@ fn draw_commit_list(f: &mut Frame, app: &mut App, area: Rect) {
                 Style::default()
             };
 
-            // Single-line item: just the dot/info row.
-            ListItem::new(Line::from(graph_spans)).style(row_style)
+            // Two-line item: connector row above + dot/info row.
+            ListItem::new(vec![
+                Line::from(connector_spans),
+                Line::from(graph_spans),
+            ])
+            .style(row_style)
         })
         .collect();
 
-    // Leading blank row at the top of the list so the first commit isn't
-    // glued to the panel border.
-    let mut items_with_lead: Vec<ListItem> = Vec::with_capacity(items.len() + 1);
-    items_with_lead.push(ListItem::new(Line::raw("")));
-    items_with_lead.extend(items);
-
     let title = format!("Commit Graph ({})", app.commits.len());
     let block = styled_block(&title, true);
-    let list = List::new(items_with_lead).block(block);
+    let list = List::new(items).block(block);
     f.render_widget(list, area);
 
-    // Click regions — each commit occupies 1 row, offset by the leading blank.
-    const ITEM_ROWS: u16 = 1;
-    const LEAD_ROWS: u16 = 1;
+    // Click regions — each commit occupies 2 rows (connector + dot).
+    const ITEM_ROWS: u16 = 2;
     let inner = inner_rect(area);
-    let max_items = (inner.height.saturating_sub(LEAD_ROWS) as usize) / ITEM_ROWS as usize + 1;
+    let max_items = (inner.height as usize) / ITEM_ROWS as usize + 1;
     for i in 0..app.commits.len().min(max_items) {
-        let row_y = inner.y + LEAD_ROWS + (i as u16) * ITEM_ROWS;
+        let row_y = inner.y + (i as u16) * ITEM_ROWS;
         if row_y >= inner.y + inner.height {
             break;
         }

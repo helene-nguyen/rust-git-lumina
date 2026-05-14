@@ -1,6 +1,6 @@
-mod app;
-mod git_ops;
-mod ui;
+pub mod app;
+pub mod git_ops;
+pub mod ui;
 
 use anyhow::Result;
 use app::{App, FilePane, InputMode, Popup, Tab};
@@ -16,24 +16,19 @@ use ratatui::{backend::CrosstermBackend, Terminal};
 use std::io;
 use std::time::Duration;
 
-fn main() -> Result<()> {
-    // Open the repo
+pub fn run() -> Result<()> {
     let repo = git_ops::open_repo(None)?;
 
-    // Setup terminal
     enable_raw_mode()?;
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
-    // Create app state
     let mut app = App::new(repo)?;
 
-    // Main loop
     let result = run_app(&mut terminal, &mut app);
 
-    // Restore terminal
     disable_raw_mode()?;
     execute!(
         terminal.backend_mut(),
@@ -59,7 +54,6 @@ fn run_app(
         if event::poll(Duration::from_millis(250))? {
             match event::read()? {
                 Event::Key(key) if key.kind == KeyEventKind::Press => {
-                    // Ctrl+C always quits
                     if key.modifiers.contains(KeyModifiers::CONTROL)
                         && key.code == KeyCode::Char('c')
                     {
@@ -106,7 +100,6 @@ fn run_app(
 
 fn handle_mouse_event(app: &mut App, mouse: MouseEvent) {
     match mouse.kind {
-        // Left click — route through click regions
         MouseEventKind::Down(MouseButton::Left) => {
             app.handle_click(mouse.column, mouse.row);
         }
@@ -122,21 +115,17 @@ fn handle_mouse_event(app: &mut App, mouse: MouseEvent) {
 
 fn handle_normal_input(app: &mut App, key: KeyCode) {
     match key {
-        // Quit
         KeyCode::Char('q') => app.running = false,
 
-        // Tab switching
         KeyCode::Char('1') => app.tab = Tab::Graph,
         KeyCode::Char('2') => app.tab = Tab::Files,
         KeyCode::Char('3') => app.tab = Tab::Branches,
         KeyCode::Tab => app.next_tab(),
         KeyCode::BackTab => app.prev_tab(),
 
-        // Navigation
         KeyCode::Up | KeyCode::Char('k') => app.select_up(),
         KeyCode::Down | KeyCode::Char('j') => app.select_down(),
 
-        // Diff scroll (PageUp / PageDown)
         KeyCode::PageUp => {
             if app.tab == Tab::Files {
                 app.diff_scroll_up(10);
@@ -144,29 +133,23 @@ fn handle_normal_input(app: &mut App, key: KeyCode) {
         }
         KeyCode::PageDown => {
             if app.tab == Tab::Files {
-                // Use a reasonable visible height estimate
                 app.diff_scroll_down(10, 20);
             }
         }
 
-        // Refresh
         KeyCode::Char('r') => {
             let _ = app.refresh_all();
             app.status_msg = "Refreshed".to_string();
         }
 
-        // Auto-refresh toggle
         KeyCode::Char('a') => app.toggle_auto_refresh(),
 
-        // Help
         KeyCode::Char('?') => app.show_help(),
 
-        // ── Remote operations (global) ──
         KeyCode::Char('P') => app.start_push(),
         KeyCode::Char('L') => app.start_pull(),
         KeyCode::Char('F') => app.do_fetch(),
 
-        // Tab-specific keys
         _ => match app.tab {
             Tab::Files => handle_files_input(app, key),
             Tab::Branches => handle_branches_input(app, key),
@@ -177,21 +160,16 @@ fn handle_normal_input(app: &mut App, key: KeyCode) {
 
 fn handle_files_input(app: &mut App, key: KeyCode) {
     match key {
-        // Cycle file pane focus
         KeyCode::Left | KeyCode::Right => app.toggle_file_pane(),
 
-        // Stage / Unstage single
         KeyCode::Char('s') => app.stage_selected(),
         KeyCode::Char('u') => app.unstage_selected(),
 
-        // Stage / Unstage all
         KeyCode::Char('S') => app.stage_all(),
         KeyCode::Char('U') => app.unstage_all(),
 
-        // Start typing commit message
         KeyCode::Char('c') => app.start_commit_input(),
 
-        // Commit
         KeyCode::Enter => {
             if app.file_pane == FilePane::CommitMsg {
                 app.do_commit();

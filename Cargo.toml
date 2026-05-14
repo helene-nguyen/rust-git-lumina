@@ -8,14 +8,6 @@ keywords = ["git", "tui", "terminal", "client", "repository", "visualization"]
 license = "MIT"
 repository = "https://github.com/helene-nguyen/rust-git-lumina.git"
 
-[[bin]]
-name = "lumina"
-path = "src/main.rs"
-
-[[bin]]
-name = "gitlumina"
-path = "src/main.rs"
-
 [dependencies]
 ratatui = "0.28"
 crossterm = "0.28"

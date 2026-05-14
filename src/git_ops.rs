@@ -26,6 +26,7 @@ pub struct CommitInfo {
     pub time: i64,         // unix timestamp
     pub parents: Vec<String>,
     pub branches: Vec<String>,
+    #[allow(dead_code)] // populated in tests + reserved for future UI use
     pub is_head: bool,
 }
 
@@ -569,17 +570,16 @@ pub fn compute_graph_lanes(commits: &[CommitInfo]) -> Vec<GraphLane> {
     let mut result = Vec::new();
 
     for commit in commits {
-        // Find which lane expects this commit
+        // Each distinct branch keeps a dedicated column: once a lane goes None
+        // (its branch tip closed), we never reuse it for a fresh commit. The
+        // commit either lands in a lane already expecting it as a parent, or
+        // gets a brand new lane appended at the right.
         let my_lane = lanes
             .iter()
             .position(|l| l.as_deref() == Some(commit.id.as_str()))
             .unwrap_or_else(|| {
-                if let Some(pos) = lanes.iter().position(|l| l.is_none()) {
-                    pos
-                } else {
-                    lanes.push(None);
-                    lanes.len() - 1
-                }
+                lanes.push(None);
+                lanes.len() - 1
             });
 
         while lanes.len() <= my_lane {
@@ -602,17 +602,8 @@ pub fn compute_graph_lanes(commits: &[CommitInfo]) -> Vec<GraphLane> {
                     .iter()
                     .position(|l| l.as_deref() == Some(parent2.as_str()))
                     .unwrap_or_else(|| {
-                        if let Some(pos) = lanes
-                            .iter()
-                            .enumerate()
-                            .position(|(i, l)| l.is_none() && i != my_lane)
-                        {
-                            lanes[pos] = Some(parent2.clone());
-                            pos
-                        } else {
-                            lanes.push(Some(parent2.clone()));
-                            lanes.len() - 1
-                        }
+                        lanes.push(Some(parent2.clone()));
+                        lanes.len() - 1
                     });
                 merge_from = Some(p2_lane);
             }
@@ -625,10 +616,6 @@ pub fn compute_graph_lanes(commits: &[CommitInfo]) -> Vec<GraphLane> {
             active_lanes,
             merge_from,
         });
-
-        while lanes.last() == Some(&None) {
-            lanes.pop();
-        }
     }
 
     result
