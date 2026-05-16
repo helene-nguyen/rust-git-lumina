@@ -209,10 +209,14 @@ impl App {
     }
 
     pub fn refresh_commits(&mut self) -> Result<()> {
-        self.commits = git_ops::get_commits(&self.repo, 200)?;
+        // Fetch the full history so the user can scroll down to the root commit.
+        self.commits = git_ops::get_commits(&self.repo, usize::MAX)?;
         self.graph_lanes = git_ops::compute_branch_lanes(&self.commits, &self.branches);
         if self.commit_selected >= self.commits.len() {
             self.commit_selected = self.commits.len().saturating_sub(1);
+        }
+        if self.commit_scroll >= self.commits.len() {
+            self.commit_scroll = 0;
         }
         Ok(())
     }

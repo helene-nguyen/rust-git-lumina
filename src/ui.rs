@@ -462,10 +462,26 @@ fn draw_commit_list(f: &mut Frame, app: &mut App, area: Rect) {
             .unwrap_or_else(|| colors::GRAPH_COLORS[c % colors::GRAPH_COLORS.len()])
     };
 
+    // Adjust scroll so the selected commit stays in view. Each list item is
+    // two rows tall (connector + dot), so visible_items = inner_height / 2.
+    const ITEM_ROWS: u16 = 2;
+    let inner = inner_rect(area);
+    let visible_items = (inner.height / ITEM_ROWS) as usize;
+    let total = app.commits.len();
+    if app.commit_selected < app.commit_scroll {
+        app.commit_scroll = app.commit_selected;
+    } else if visible_items > 0 && app.commit_selected >= app.commit_scroll + visible_items {
+        app.commit_scroll = app.commit_selected + 1 - visible_items;
+    }
+    let max_scroll = total.saturating_sub(visible_items);
+    app.commit_scroll = app.commit_scroll.min(max_scroll);
+
     let items: Vec<ListItem> = app
         .commits
         .iter()
         .enumerate()
+        .skip(app.commit_scroll)
+        .take(visible_items + 1)
         .map(|(i, commit)| {
             let sel = i == app.commit_selected;
             let lane_info = app.graph_lanes.get(i);
@@ -651,14 +667,34 @@ fn draw_commit_list(f: &mut Frame, app: &mut App, area: Rect) {
         })
         .collect();
 
-    let title = format!("Commit Graph ({})", app.commits.len());
+    let title = if total > 0 {
+        format!("Commit Graph ({}/{})", app.commit_selected + 1, total)
+    } else {
+        "Commit Graph (0)".to_string()
+    };
     let block = styled_block(&title, true);
     let list = List::new(items).block(block);
     f.render_widget(list, area);
 
+    // Vertical scrollbar on the right edge — only shown when content overflows.
+    if total > visible_items {
+        let mut sb_state = ScrollbarState::new(total)
+            .position(app.commit_scroll)
+            .viewport_content_length(visible_items);
+        let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
+            .begin_symbol(Some("▲"))
+            .end_symbol(Some("▼"))
+            .style(Style::default().fg(colors::ACCENT_GLOW));
+        let sb_area = Rect::new(
+            area.x + area.width - 1,
+            area.y + 1,
+            1,
+            area.height.saturating_sub(2),
+        );
+        f.render_stateful_widget(scrollbar, sb_area, &mut sb_state);
+    }
+
     // Click regions — each commit occupies 2 rows (connector + dot).
-    const ITEM_ROWS: u16 = 2;
-    let inner = inner_rect(area);
     let max_items = (inner.height as usize) / ITEM_ROWS as usize + 1;
     for i in 0..app.commits.len().min(max_items) {
         let row_y = inner.y + (i as u16) * ITEM_ROWS;
