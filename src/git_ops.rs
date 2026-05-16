@@ -562,6 +562,12 @@ pub struct GraphLane {
     pub lane: usize,
     pub active_lanes: Vec<bool>,
     pub merge_from: Option<usize>,
+    /// Set when this commit is the tip of one or more branches that aren't its
+    /// first-parent owner — i.e. a fast-forward merge collapsed them onto this
+    /// SHA. Carries `(column, branch_name)` of the (first such) alias so the
+    /// UI can render `●──●` linking the owner's dot to the alias's column,
+    /// coloured by the alias branch.
+    pub alias_to: Option<(usize, String)>,
     /// When the lane was assigned by `compute_branch_lanes`, this is the name
     /// of the local branch that owns the commit. `None` for the DAG-based
     /// `compute_graph_lanes`.
@@ -619,6 +625,7 @@ pub fn compute_graph_lanes(commits: &[CommitInfo]) -> Vec<GraphLane> {
             lane: my_lane,
             active_lanes,
             merge_from,
+            alias_to: None,
             owning_branch: None,
         });
     }
@@ -637,7 +644,7 @@ pub fn compute_branch_lanes(
     commits: &[CommitInfo],
     branches: &[BranchInfo],
 ) -> Vec<GraphLane> {
-    use std::collections::{HashMap, VecDeque};
+    use std::collections::HashMap;
 
     // Local branches only. main/master pinned first, then alphabetical, so
     // the layout doesn't shift with checkouts.
@@ -667,49 +674,43 @@ pub fn compute_branch_lanes(
         .map(|(i, c)| (c.id.as_str(), i))
         .collect();
 
-    // BFS seeds: each local tip is a source for its own column. Each remote
-    // tracking branch (`origin/X`) is also a source for the local `X`'s column
-    // — so commits only reachable via the remote (e.g. unfetched-but-known
-    // ancestors of `origin/main`) still land in `main`'s column instead of
-    // bleeding into whichever feature branch happens to reach them next.
+    // First-parent ownership: process branches in priority order (main first,
+    // then alphabetical). Each branch walks its first-parent chain from its
+    // tip — and from its remote tip too, if any — claiming every unclaimed
+    // commit. Hitting a commit already claimed by a higher-priority branch
+    // stops the walk. This mirrors `git log --first-parent` semantics: main's
+    // mainline stays main's; a feature branch only owns its own divergent
+    // commits.
     let n = commits.len();
-    let mut best: Vec<Option<(usize, usize, String)>> = vec![None; n];
-    let mut queue: VecDeque<(usize, usize, usize, String)> = VecDeque::new();
+    let mut best: Vec<Option<(usize, String)>> = vec![None; n];
     for b in &locals {
+        let col = col_of[b.name.as_str()];
+        let mut starts: Vec<usize> = Vec::new();
         if let Some(&idx) = by_id.get(b.commit_id.as_str()) {
-            let col = col_of[b.name.as_str()];
-            queue.push_back((idx, 0, col, b.name.clone()));
+            starts.push(idx);
         }
-        // Also seed from the corresponding remote tip, if any. Prefer the
-        // explicit upstream link; fall back to a `origin/<name>` name match.
         let remote_name = b
             .upstream
             .clone()
             .or_else(|| Some(format!("origin/{}", b.name)));
         if let Some(rname) = remote_name {
-            if let Some(remote) = branches
-                .iter()
-                .find(|r| r.is_remote && r.name == rname)
-            {
+            if let Some(remote) = branches.iter().find(|r| r.is_remote && r.name == rname) {
                 if let Some(&idx) = by_id.get(remote.commit_id.as_str()) {
-                    let col = col_of[b.name.as_str()];
-                    queue.push_back((idx, 0, col, b.name.clone()));
+                    starts.push(idx);
                 }
             }
         }
-    }
-    while let Some((idx, dist, col, name)) = queue.pop_front() {
-        let improve = match &best[idx] {
-            None => true,
-            Some((d, c, _)) => dist < *d || (dist == *d && col < *c),
-        };
-        if !improve {
-            continue;
-        }
-        best[idx] = Some((dist, col, name.clone()));
-        for parent in &commits[idx].parents {
-            if let Some(&pidx) = by_id.get(parent.as_str()) {
-                queue.push_back((pidx, dist + 1, col, name.clone()));
+        for start in starts {
+            let mut cursor = Some(start);
+            while let Some(idx) = cursor {
+                if best[idx].is_some() {
+                    break;
+                }
+                best[idx] = Some((col, b.name.clone()));
+                cursor = commits[idx]
+                    .parents
+                    .get(0)
+                    .and_then(|p| by_id.get(p.as_str()).copied());
             }
         }
     }
@@ -729,33 +730,47 @@ pub fn compute_branch_lanes(
             last[c] = Some(i);
         }
     };
-    // "Tip alias": a commit with ≥ 2 local branches pointing at it. BFS gave
-    // the SHA to a single owning branch, but the other branches converged
-    // here too (a fast-forward merge collapses to this state). For each such
-    // commit, pick the first non-owning local branch as the alias and treat
-    // its column as a synthetic merge_from — yields `◉──╮` at the FF row.
-    let mut alias_col: Vec<Option<usize>> = vec![None; n];
+    // Bump endpoints from owned commits and merge second-parent rows.
+    let mut alias_col: Vec<Option<(usize, String)>> = vec![None; n];
     for (i, commit) in commits.iter().enumerate() {
-        if let Some((_, c, _)) = &best[i] {
+        if let Some((c, _)) = &best[i] {
             bump(*c, i, &mut first_row, &mut last_row);
         }
         if commit.parents.len() >= 2 {
             if let Some(&pidx) = by_id.get(commit.parents[1].as_str()) {
-                if let Some((_, c, _)) = &best[pidx] {
+                if let Some((c, _)) = &best[pidx] {
                     bump(*c, i, &mut first_row, &mut last_row);
                 }
             }
-        } else {
-            // Only synthesize alias for non-merges — a real merge already has
-            // its own connector and shouldn't be hijacked.
-            let owning_name = best[i].as_ref().map(|(_, _, n)| n.as_str());
-            for b in &commit.branches {
-                if let Some(&alias_c) = col_of.get(b.as_str()) {
-                    if Some(b.as_str()) != owning_name {
-                        alias_col[i] = Some(alias_c);
-                        bump(alias_c, i, &mut first_row, &mut last_row);
-                        break;
-                    }
+        }
+    }
+
+    // FF aliases: a local branch tip that's been collapsed onto another
+    // branch's first-parent chain (the BFS owner is a different column).
+    // Each alias gets a single-row entry in its own column at the FF row,
+    // so the UI can render `●──●` connecting the owner's dot to the alias.
+    for b in &locals {
+        let my_col = col_of[b.name.as_str()];
+        let mut tip_indices: Vec<usize> = Vec::new();
+        if let Some(&idx) = by_id.get(b.commit_id.as_str()) {
+            tip_indices.push(idx);
+        }
+        let remote_name = b
+            .upstream
+            .clone()
+            .or_else(|| Some(format!("origin/{}", b.name)));
+        if let Some(rname) = remote_name {
+            if let Some(r) = branches.iter().find(|r| r.is_remote && r.name == rname) {
+                if let Some(&idx) = by_id.get(r.commit_id.as_str()) {
+                    tip_indices.push(idx);
+                }
+            }
+        }
+        for idx in tip_indices {
+            if let Some((owner_c, _)) = &best[idx] {
+                if *owner_c != my_col && alias_col[idx].is_none() {
+                    alias_col[idx] = Some((my_col, b.name.clone()));
+                    bump(my_col, idx, &mut first_row, &mut last_row);
                 }
             }
         }
@@ -787,15 +802,22 @@ pub fn compute_branch_lanes(
     for (i, commit) in commits.iter().enumerate() {
         let (lane, name) = best[i]
             .as_ref()
-            .map(|(_, c, n)| (remap[*c], Some(n.clone())))
+            .map(|(c, n)| (remap[*c], Some(n.clone())))
             .unwrap_or((0, None));
 
         let merge_from = if commit.parents.len() >= 2 {
             by_id
                 .get(commit.parents[1].as_str())
-                .and_then(|&pidx| best[pidx].as_ref().map(|(_, c, _)| remap[*c]))
+                .and_then(|&pidx| best[pidx].as_ref().map(|(c, _)| remap[*c]))
         } else {
-            alias_col[i].map(|c| remap[c])
+            None
+        };
+        let alias_to = if merge_from.is_none() {
+            alias_col[i]
+                .as_ref()
+                .map(|(c, n)| (remap[*c], n.clone()))
+        } else {
+            None
         };
 
         let active_lanes: Vec<bool> = (0..new_num_cols)
@@ -809,6 +831,7 @@ pub fn compute_branch_lanes(
             lane,
             active_lanes,
             merge_from,
+            alias_to,
             owning_branch: name,
         });
     }

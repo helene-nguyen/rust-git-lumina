@@ -408,8 +408,9 @@ fn draw_commit_list(f: &mut Frame, app: &mut App, area: Rect) {
         .unwrap_or(1)
         .min(6); // cap at 6 lanes for display
 
-    // Map each column → owning branch name (if any), so column colours can
-    // come from the branch palette instead of the lane-index palette. Falls
+    // Map each column → branch name (if any), so column colours come from the
+    // branch palette. A column's branch is either its owner (a lane with
+    // owned commits) or the alias of a tip-only branch (FF column). Falls
     // back to GRAPH_COLORS for empty columns.
     let col_branch: Vec<Option<String>> = (0..max_lanes)
         .map(|c| {
@@ -417,6 +418,14 @@ fn draw_commit_list(f: &mut Frame, app: &mut App, area: Rect) {
                 .iter()
                 .find(|l| l.lane == c)
                 .and_then(|l| l.owning_branch.clone())
+                .or_else(|| {
+                    app.graph_lanes.iter().find_map(|l| {
+                        l.alias_to
+                            .as_ref()
+                            .filter(|(ac, _)| *ac == c)
+                            .map(|(_, n)| n.clone())
+                    })
+                })
         })
         .collect();
     let column_color = |c: usize| -> Color {
@@ -494,7 +503,13 @@ fn draw_commit_list(f: &mut Frame, app: &mut App, area: Rect) {
             if let Some(info) = lane_info {
                 let my_lane = info.lane.min(max_lanes - 1);
                 let merge_to = info.merge_from.map(|m| m.min(max_lanes - 1));
-                let is_merge = info.merge_from.is_some();
+                let alias_to = info
+                    .alias_to
+                    .as_ref()
+                    .map(|(c, _)| (*c).min(max_lanes - 1));
+                let join_to = merge_to.or(alias_to);
+                let is_merge = merge_to.is_some();
+                let is_alias = merge_to.is_none() && alias_to.is_some();
 
                 // Each lane is rendered as 3 cells wide so branches read as
                 // distinct columns: 1 cell for the glyph + 2 cells of spacing.
@@ -503,12 +518,12 @@ fn draw_commit_list(f: &mut Frame, app: &mut App, area: Rect) {
                     let is_active = col < info.active_lanes.len() && info.active_lanes[col];
 
                     if col == my_lane {
-                        // Commit node — hollow ring for merges, solid dot for regular.
-                        // Selection emphasises via BOLD on the node colour rather than
-                        // swapping the shape.
+                        // Commit node: hollow ring for real merges (2+ parents),
+                        // solid dot otherwise (regular commits AND fast-forward
+                        // tip aliases — those aren't actual merges in git).
                         let glyph = if is_merge { "◉" } else { "●" };
-                        let trailing = match merge_to {
-                            Some(mt) if mt > my_lane => "──",
+                        let trailing = match join_to {
+                            Some(jt) if jt > my_lane => "──",
                             _ => "  ",
                         };
                         let mut node_style = Style::default().fg(my_color);
@@ -519,22 +534,32 @@ fn draw_commit_list(f: &mut Frame, app: &mut App, area: Rect) {
                             format!("{}{}", glyph, trailing),
                             node_style,
                         ));
-                    } else if let Some(mt) = merge_to {
-                        let between_right = mt > my_lane && col > my_lane && col < mt;
-                        let between_left = mt < my_lane && col > mt && col < my_lane;
+                    } else if let Some(jt) = join_to {
+                        let between_right = jt > my_lane && col > my_lane && col < jt;
+                        let between_left = jt < my_lane && col > jt && col < my_lane;
                         if between_right || between_left {
-                            // Horizontal segment of the merge connector
+                            // Horizontal segment of the connector
                             graph_spans.push(Span::styled(
                                 "───",
                                 Style::default().fg(my_color),
                             ));
-                        } else if col == mt {
-                            // Corner where connector turns down into the second-parent lane
-                            let corner = if mt > my_lane { "╮  " } else { "╭──" };
-                            graph_spans.push(Span::styled(
-                                corner,
-                                Style::default().fg(my_color),
-                            ));
+                        } else if col == jt {
+                            if is_alias {
+                                // FF alias: terminating solid dot in alias colour.
+                                let glyph = if jt > my_lane { "●  " } else { "●──" };
+                                graph_spans.push(Span::styled(
+                                    glyph,
+                                    Style::default().fg(col_color),
+                                ));
+                            } else {
+                                // Real merge: corner turning down into the
+                                // second-parent lane.
+                                let corner = if jt > my_lane { "╮  " } else { "╭──" };
+                                graph_spans.push(Span::styled(
+                                    corner,
+                                    Style::default().fg(my_color),
+                                ));
+                            }
                         } else if is_active {
                             // Background lane: keep the column visible with `╎`
                             // so each open branch reads as its own persistent
