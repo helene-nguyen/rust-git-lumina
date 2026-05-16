@@ -729,24 +729,41 @@ pub fn compute_branch_lanes(
             last[c] = Some(i);
         }
     };
-    for (i, slot) in best.iter().enumerate() {
-        if let Some((_, c, _)) = slot {
+    // "Tip alias": a commit with ≥ 2 local branches pointing at it. BFS gave
+    // the SHA to a single owning branch, but the other branches converged
+    // here too (a fast-forward merge collapses to this state). For each such
+    // commit, pick the first non-owning local branch as the alias and treat
+    // its column as a synthetic merge_from — yields `◉──╮` at the FF row.
+    let mut alias_col: Vec<Option<usize>> = vec![None; n];
+    for (i, commit) in commits.iter().enumerate() {
+        if let Some((_, c, _)) = &best[i] {
             bump(*c, i, &mut first_row, &mut last_row);
         }
-        let commit = &commits[i];
         if commit.parents.len() >= 2 {
             if let Some(&pidx) = by_id.get(commit.parents[1].as_str()) {
                 if let Some((_, c, _)) = &best[pidx] {
                     bump(*c, i, &mut first_row, &mut last_row);
                 }
             }
+        } else {
+            // Only synthesize alias for non-merges — a real merge already has
+            // its own connector and shouldn't be hijacked.
+            let owning_name = best[i].as_ref().map(|(_, _, n)| n.as_str());
+            for b in &commit.branches {
+                if let Some(&alias_c) = col_of.get(b.as_str()) {
+                    if Some(b.as_str()) != owning_name {
+                        alias_col[i] = Some(alias_c);
+                        bump(alias_c, i, &mut first_row, &mut last_row);
+                        break;
+                    }
+                }
+            }
         }
     }
 
-    // Compact: drop columns that own no commits (e.g. a branch whose tip is
-    // shared with a higher-priority branch — the BFS tie-break gave the SHA
-    // to the higher-priority column, leaving this one empty). The remap keeps
-    // relative ordering so main stays at the left.
+    // Compact: drop columns that own no commits and aren't used as an alias
+    // target either. The remap keeps relative ordering so main stays at the
+    // left.
     let used: Vec<bool> = (0..num_cols).map(|c| first_row[c].is_some()).collect();
     let mut remap: Vec<usize> = vec![0; num_cols];
     let mut compact = 0usize;
@@ -778,7 +795,7 @@ pub fn compute_branch_lanes(
                 .get(commit.parents[1].as_str())
                 .and_then(|&pidx| best[pidx].as_ref().map(|(_, c, _)| remap[*c]))
         } else {
-            None
+            alias_col[i].map(|c| remap[c])
         };
 
         let active_lanes: Vec<bool> = (0..new_num_cols)
