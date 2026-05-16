@@ -6,7 +6,7 @@ A terminal-based Git client inspired by GitKraken, built with Rust.
 
 ## Features
 
-- **Commit Graph** — Visual commit history with branch labels, merge indicators, and color-coded graph lines
+- **Commit Graph** — Visual commit history with per-branch columns, hash-stable branch colors, merge connectors (`◉──╮`), and fast-forward alias dots (`●──●`)
 - **File Staging** — Stage/unstage files (single or all), view diffs, write commit messages
 - **Branch Management** — Create, checkout, and delete branches
 - **Push / Pull / Fetch** — Full remote operations with SSH key and credential helper support
@@ -19,7 +19,7 @@ A terminal-based Git client inspired by GitKraken, built with Rust.
 ## Installation
 
 ```bash
-cargo install gitlumina
+cargo install git-lumina
 ```
 
 This installs both `lumina` and `gitlumina` commands globally. Then navigate to any Git repository and run:
@@ -69,6 +69,7 @@ gitlumina
 | `F`         | Fetch from remote   |
 | `r`         | Refresh all data    |
 | `a`         | Toggle auto-refresh |
+| `m`         | Toggle mouse capture (select/copy in terminal) |
 | `?`         | Toggle help popup   |
 | `q`         | Quit                |
 | `Ctrl+C`    | Force quit          |
@@ -107,10 +108,13 @@ gitlumina
 
 ```
 src/
-├── main.rs       # Entry point, terminal setup, event loop, mouse routing
-├── app.rs        # Application state, click regions, business logic
-├── ui.rs         # All rendering (ratatui widgets, scrollbar, popups)
-└── git_ops.rs    # Git operations (git2 wrapper + push/pull/fetch)
+├── lib.rs          # Public `run()`, terminal setup, event loop, mouse routing
+├── app.rs          # Application state, click regions, business logic
+├── ui.rs           # All rendering (ratatui widgets, scrollbar, popups)
+├── git_ops.rs      # Git operations (git2 wrapper + push/pull/fetch)
+└── bin/
+    ├── lumina.rs       # Thin binary entry point → calls `git_lumina::run()`
+    └── gitlumina.rs    # Thin binary entry point → calls `git_lumina::run()`
 ```
 
 The architecture cleanly separates concerns:
@@ -118,7 +122,7 @@ The architecture cleanly separates concerns:
 - **`git_ops`** — Pure Git operations including remote push/pull/fetch with credential discovery
 - **`app`** — State machine with click region tracking for mouse support
 - **`ui`** — Pure rendering function of `App` state → screen output, with diff scrollbar
-- **`main`** — Event loop handling keyboard, mouse clicks, and scroll events
+- **`lib::run`** — Event loop handling keyboard, mouse clicks, and scroll events; reused by both bin targets
 
 ## Remote Operations
 

@@ -1,3 +1,4 @@
 .claude
 target/
 test_output/
+.claude/settings.local.json
