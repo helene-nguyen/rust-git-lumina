@@ -31,6 +31,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY --from=builder /build/target/release/gitlumina /usr/local/bin/gitlumina
 COPY --from=builder /build/target/release/lumina    /usr/local/bin/lumina
 
+# Trust any bind-mounted repo regardless of its host UID/GID.
+# Required because libgit2/git refuses to open repos not owned by the current
+# user (CVE-2022-24765), and the host UID rarely matches root inside the image.
+RUN git config --system --add safe.directory '*'
+
 WORKDIR /repo
 
 ENTRYPOINT ["lumina"]
