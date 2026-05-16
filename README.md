@@ -1,3 +1,5 @@
+![GitLumina Logo](./docs/media/gitlumina-logo.png)
+
 # GitLumina TUI
 
 A terminal-based Git client inspired by GitKraken, built with Rust.
@@ -17,7 +19,7 @@ A terminal-based Git client inspired by GitKraken, built with Rust.
 ## Installation
 
 ```bash
-cargo install git-lumina
+cargo install gitlumina
 ```
 
 This installs both `lumina` and `gitlumina` commands globally. Then navigate to any Git repository and run:
@@ -37,8 +39,9 @@ lumina
 
 ## Developers Build & Run
 
+Clone the repo and build with:
+
 ```bash
-cd git-lumina
 cargo build --release
 
 # Run inside any Git repository
@@ -54,21 +57,21 @@ gitlumina
 
 ### Global
 
-| Key         | Action            |
-| ----------- | ----------------- |
-| `1` `2` `3` | Switch tabs       |
-| `Tab`       | Next tab          |
-| `Shift+Tab` | Previous tab      |
-| `↑`/`k`     | Move up           |
-| `↓`/`j`     | Move down         |
-| `P`         | Push to remote    |
-| `L`         | Pull from remote  |
-| `F`         | Fetch from remote |
+| Key         | Action              |
+| ----------- | ------------------- |
+| `1` `2` `3` | Switch tabs         |
+| `Tab`       | Next tab            |
+| `Shift+Tab` | Previous tab        |
+| `↑`/`k`     | Move up             |
+| `↓`/`j`     | Move down           |
+| `P`         | Push to remote      |
+| `L`         | Pull from remote    |
+| `F`         | Fetch from remote   |
 | `r`         | Refresh all data    |
 | `a`         | Toggle auto-refresh |
 | `?`         | Toggle help popup   |
-| `q`         | Quit              |
-| `Ctrl+C`    | Force quit        |
+| `q`         | Quit                |
+| `Ctrl+C`    | Force quit          |
 
 ### Files Tab
 
