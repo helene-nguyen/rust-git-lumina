@@ -10,9 +10,9 @@ use crossterm::{
         MouseButton, MouseEvent, MouseEventKind,
     },
     execute,
-    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
+    terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
-use ratatui::{backend::CrosstermBackend, Terminal};
+use ratatui::{Terminal, backend::CrosstermBackend};
 use std::io;
 use std::time::Duration;
 
@@ -44,10 +44,7 @@ pub fn run() -> Result<()> {
     Ok(())
 }
 
-fn run_app(
-    terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
-    app: &mut App,
-) -> Result<()> {
+fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, app: &mut App) -> Result<()> {
     // Mirrors `app.mouse_capture` so we only toggle the terminal when it changes.
     let mut capture_on = app.mouse_capture;
     loop {
@@ -73,23 +70,23 @@ fn run_app(
 
                     match app.input_mode {
                         InputMode::Editing => handle_editing_input(app, key.code),
-                        InputMode::Normal => {
-                            match &app.popup {
-                                Popup::ConfirmDelete(_) | Popup::ConfirmPush | Popup::ConfirmPull => match key.code {
+                        InputMode::Normal => match &app.popup {
+                            Popup::ConfirmDelete(_) | Popup::ConfirmPush | Popup::ConfirmPull => {
+                                match key.code {
                                     KeyCode::Char('y') => app.confirm_popup(),
                                     KeyCode::Char('n') | KeyCode::Esc => app.cancel_popup(),
                                     _ => {}
-                                },
-                                Popup::Help => match key.code {
-                                    KeyCode::Esc | KeyCode::Char('?') | KeyCode::Char('q') => {
-                                        app.popup = Popup::None
-                                    }
-                                    _ => {}
-                                },
-                                Popup::None => handle_normal_input(app, key.code),
-                                _ => {}
+                                }
                             }
-                        }
+                            Popup::Help => match key.code {
+                                KeyCode::Esc | KeyCode::Char('?') | KeyCode::Char('q') => {
+                                    app.popup = Popup::None
+                                }
+                                _ => {}
+                            },
+                            Popup::None => handle_normal_input(app, key.code),
+                            _ => {}
+                        },
                     }
                 }
 

@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use git2::{
-    BranchType, Cred, DiffOptions, FetchOptions, PushOptions,
-    RemoteCallbacks, Repository, Signature, Sort, Status, StatusOptions, StatusShow,
+    BranchType, Cred, DiffOptions, FetchOptions, PushOptions, RemoteCallbacks, Repository,
+    Signature, Sort, Status, StatusOptions, StatusShow,
 };
 use std::env;
 use std::path::Path;
@@ -19,11 +19,11 @@ pub struct RemoteStatus {
 /// Represents a single commit in the log
 #[derive(Clone, Debug)]
 pub struct CommitInfo {
-    pub id: String,        // short SHA
-    pub id_full: String,   // full SHA
-    pub message: String,   // first line of commit message
+    pub id: String,      // short SHA
+    pub id_full: String, // full SHA
+    pub message: String, // first line of commit message
     pub author: String,
-    pub time: i64,         // unix timestamp
+    pub time: i64, // unix timestamp
     pub parents: Vec<String>,
     pub branches: Vec<String>,
     #[allow(dead_code)] // populated in tests + reserved for future UI use
@@ -121,7 +121,7 @@ pub fn get_commits(repo: &Repository, max_count: usize) -> Result<Vec<CommitInfo
             .collect();
 
         let branches = branch_map.get(&full_id).cloned().unwrap_or_default();
-        let is_head = head_target.map_or(false, |h| h == oid);
+        let is_head = head_target == Some(oid);
 
         commits.push(CommitInfo {
             id: short_id.to_string(),
@@ -177,12 +177,18 @@ pub fn get_status(repo: &Repository) -> Result<(Vec<FileStatus>, Vec<FileStatus>
 
         for (flag, state) in index_checks {
             if st.contains(*flag) {
-                staged.push(FileStatus { path: path.clone(), status: state.clone() });
+                staged.push(FileStatus {
+                    path: path.clone(),
+                    status: state.clone(),
+                });
             }
         }
         for (flag, state) in wt_checks {
             if st.contains(*flag) {
-                unstaged.push(FileStatus { path: path.clone(), status: state.clone() });
+                unstaged.push(FileStatus {
+                    path: path.clone(),
+                    status: state.clone(),
+                });
             }
         }
     }
@@ -220,7 +226,9 @@ pub fn create_commit(repo: &Repository, message: &str) -> Result<String> {
     let tree_oid = index.write_tree()?;
     let tree = repo.find_tree(tree_oid)?;
 
-    let sig = repo.signature().or_else(|_| Signature::now("User", "user@example.com"))?;
+    let sig = repo
+        .signature()
+        .or_else(|_| Signature::now("User", "user@example.com"))?;
 
     let oid = match repo.head().and_then(|h| h.peel_to_commit()) {
         Ok(parent) => repo.commit(Some("HEAD"), &sig, &sig, message, &tree, &[&parent])?,
@@ -331,7 +339,11 @@ pub fn get_file_diff(repo: &Repository, path: &str, staged: bool) -> Result<Stri
 
 /// Extract the remote name from an upstream ref like "origin/main" → "origin"
 fn parse_remote_name(upstream_name: &str) -> String {
-    upstream_name.split('/').next().unwrap_or("origin").to_string()
+    upstream_name
+        .split('/')
+        .next()
+        .unwrap_or("origin")
+        .to_string()
 }
 
 // ── Remote Operations ───────────────────────────────────
@@ -351,22 +363,19 @@ fn make_callbacks<'a>() -> RemoteCallbacks<'a> {
             let home = env::var("HOME").unwrap_or_else(|_| ".".to_string());
             for key_name in &["id_ed25519", "id_rsa", "id_ecdsa"] {
                 let key_path = Path::new(&home).join(".ssh").join(key_name);
-                if key_path.exists() {
-                    if let Ok(cred) = Cred::ssh_key(user, None, &key_path, None) {
-                        return Ok(cred);
-                    }
+                if key_path.exists()
+                    && let Ok(cred) = Cred::ssh_key(user, None, &key_path, None)
+                {
+                    return Ok(cred);
                 }
             }
         }
         // Try credential helper / default credentials
-        if allowed_types.is_user_pass_plaintext() {
-            if let Ok(cred) = Cred::credential_helper(
-                &git2::Config::open_default()?,
-                url,
-                username_from_url,
-            ) {
-                return Ok(cred);
-            }
+        if allowed_types.is_user_pass_plaintext()
+            && let Ok(cred) =
+                Cred::credential_helper(&git2::Config::open_default()?, url, username_from_url)
+        {
+            return Ok(cred);
         }
         Cred::default()
     });
@@ -399,22 +408,16 @@ pub fn get_remote_status(repo: &Repository) -> Result<RemoteStatus> {
                 upstream_branch: None,
                 ahead: 0,
                 behind: 0,
-            })
+            });
         }
     };
 
-    let upstream_name = upstream
-        .name()?
-        .map(|s| s.to_string())
-        .unwrap_or_default();
+    let upstream_name = upstream.name()?.map(|s| s.to_string()).unwrap_or_default();
 
     let remote_name = Some(parse_remote_name(&upstream_name));
 
     let local_oid = head.target().context("HEAD has no target")?;
-    let upstream_oid = upstream
-        .get()
-        .target()
-        .context("Upstream has no target")?;
+    let upstream_oid = upstream.get().target().context("Upstream has no target")?;
 
     let (ahead, behind) = repo.graph_ahead_behind(local_oid, upstream_oid)?;
 
@@ -439,14 +442,11 @@ pub fn fetch(repo: &Repository) -> Result<String> {
     let head = repo.head().context("Cannot fetch: no HEAD")?;
     let branch_name = head.shorthand().context("Cannot determine branch name")?;
     let local_branch = repo.find_branch(branch_name, BranchType::Local)?;
-    let upstream = local_branch
-        .upstream()
-        .context("No upstream branch configured. Set one with: git branch --set-upstream-to=origin/<branch>")?;
+    let upstream = local_branch.upstream().context(
+        "No upstream branch configured. Set one with: git branch --set-upstream-to=origin/<branch>",
+    )?;
 
-    let upstream_name = upstream
-        .name()?
-        .unwrap_or("origin")
-        .to_string();
+    let upstream_name = upstream.name()?.unwrap_or("origin").to_string();
     let remote_name = parse_remote_name(&upstream_name);
 
     let mut remote = repo.find_remote(&remote_name)?;
@@ -535,10 +535,7 @@ pub fn push(repo: &Repository) -> Result<String> {
         .upstream()
         .context("No upstream branch configured. Set one with: git push -u origin <branch>")?;
 
-    let upstream_name = upstream
-        .name()?
-        .unwrap_or("origin")
-        .to_string();
+    let upstream_name = upstream.name()?.unwrap_or("origin").to_string();
     let remote_name = parse_remote_name(&upstream_name);
 
     let mut remote = repo.find_remote(&remote_name)?;
@@ -640,10 +637,7 @@ pub fn compute_graph_lanes(commits: &[CommitInfo]) -> Vec<GraphLane> {
 /// commits. `active_lanes[c]` is true at row i iff column `c` has at least one
 /// owned commit between the first and last owned row inclusive — i.e. the
 /// column shows a continuous track over its lifetime.
-pub fn compute_branch_lanes(
-    commits: &[CommitInfo],
-    branches: &[BranchInfo],
-) -> Vec<GraphLane> {
+pub fn compute_branch_lanes(commits: &[CommitInfo], branches: &[BranchInfo]) -> Vec<GraphLane> {
     use std::collections::HashMap;
 
     // Local branches only. main/master pinned first, then alphabetical, so
@@ -693,12 +687,11 @@ pub fn compute_branch_lanes(
             .upstream
             .clone()
             .or_else(|| Some(format!("origin/{}", b.name)));
-        if let Some(rname) = remote_name {
-            if let Some(remote) = branches.iter().find(|r| r.is_remote && r.name == rname) {
-                if let Some(&idx) = by_id.get(remote.commit_id.as_str()) {
-                    starts.push(idx);
-                }
-            }
+        if let Some(rname) = remote_name
+            && let Some(remote) = branches.iter().find(|r| r.is_remote && r.name == rname)
+            && let Some(&idx) = by_id.get(remote.commit_id.as_str())
+        {
+            starts.push(idx);
         }
         for start in starts {
             let mut cursor = Some(start);
@@ -709,7 +702,7 @@ pub fn compute_branch_lanes(
                 best[idx] = Some((col, b.name.clone()));
                 cursor = commits[idx]
                     .parents
-                    .get(0)
+                    .first()
                     .and_then(|p| by_id.get(p.as_str()).copied());
             }
         }
@@ -722,26 +715,26 @@ pub fn compute_branch_lanes(
     // first owned commit.
     let mut first_row: Vec<Option<usize>> = vec![None; num_cols];
     let mut last_row: Vec<Option<usize>> = vec![None; num_cols];
-    let bump = |c: usize, i: usize, first: &mut Vec<Option<usize>>, last: &mut Vec<Option<usize>>| {
-        if first[c].map_or(true, |f| i < f) {
-            first[c] = Some(i);
-        }
-        if last[c].map_or(true, |l| i > l) {
-            last[c] = Some(i);
-        }
-    };
+    let bump =
+        |c: usize, i: usize, first: &mut Vec<Option<usize>>, last: &mut Vec<Option<usize>>| {
+            if first[c].is_none_or(|f| i < f) {
+                first[c] = Some(i);
+            }
+            if last[c].is_none_or(|l| i > l) {
+                last[c] = Some(i);
+            }
+        };
     // Bump endpoints from owned commits and merge second-parent rows.
     let mut alias_col: Vec<Option<(usize, String)>> = vec![None; n];
     for (i, commit) in commits.iter().enumerate() {
         if let Some((c, _)) = &best[i] {
             bump(*c, i, &mut first_row, &mut last_row);
         }
-        if commit.parents.len() >= 2 {
-            if let Some(&pidx) = by_id.get(commit.parents[1].as_str()) {
-                if let Some((c, _)) = &best[pidx] {
-                    bump(*c, i, &mut first_row, &mut last_row);
-                }
-            }
+        if commit.parents.len() >= 2
+            && let Some(&pidx) = by_id.get(commit.parents[1].as_str())
+            && let Some((c, _)) = &best[pidx]
+        {
+            bump(*c, i, &mut first_row, &mut last_row);
         }
     }
 
@@ -759,19 +752,19 @@ pub fn compute_branch_lanes(
             .upstream
             .clone()
             .or_else(|| Some(format!("origin/{}", b.name)));
-        if let Some(rname) = remote_name {
-            if let Some(r) = branches.iter().find(|r| r.is_remote && r.name == rname) {
-                if let Some(&idx) = by_id.get(r.commit_id.as_str()) {
-                    tip_indices.push(idx);
-                }
-            }
+        if let Some(rname) = remote_name
+            && let Some(r) = branches.iter().find(|r| r.is_remote && r.name == rname)
+            && let Some(&idx) = by_id.get(r.commit_id.as_str())
+        {
+            tip_indices.push(idx);
         }
         for idx in tip_indices {
-            if let Some((owner_c, _)) = &best[idx] {
-                if *owner_c != my_col && alias_col[idx].is_none() {
-                    alias_col[idx] = Some((my_col, b.name.clone()));
-                    bump(my_col, idx, &mut first_row, &mut last_row);
-                }
+            if let Some((owner_c, _)) = &best[idx]
+                && *owner_c != my_col
+                && alias_col[idx].is_none()
+            {
+                alias_col[idx] = Some((my_col, b.name.clone()));
+                bump(my_col, idx, &mut first_row, &mut last_row);
             }
         }
     }
@@ -813,9 +806,7 @@ pub fn compute_branch_lanes(
             None
         };
         let alias_to = if merge_from.is_none() {
-            alias_col[i]
-                .as_ref()
-                .map(|(c, n)| (remap[*c], n.clone()))
+            alias_col[i].as_ref().map(|(c, n)| (remap[*c], n.clone()))
         } else {
             None
         };
@@ -859,9 +850,8 @@ mod tests {
     /// Returns (Repository, TempDir path) — caller should clean up.
     fn temp_repo() -> (Repository, std::path::PathBuf) {
         let id = COUNTER.fetch_add(1, Ordering::SeqCst);
-        let dir = std::env::temp_dir().join(format!(
-            "git_lumina_test_{}_{}", std::process::id(), id
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("git_lumina_test_{}_{}", std::process::id(), id));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
         let repo = Repository::init(&dir).unwrap();
@@ -879,7 +869,13 @@ mod tests {
     }
 
     /// Helper: write a file, stage it, and commit
-    fn write_and_commit(repo: &Repository, dir: &std::path::Path, filename: &str, content: &str, msg: &str) -> String {
+    fn write_and_commit(
+        repo: &Repository,
+        dir: &std::path::Path,
+        filename: &str,
+        content: &str,
+        msg: &str,
+    ) -> String {
         fs::write(dir.join(filename), content).unwrap();
         stage_file(repo, filename).unwrap();
         create_commit(repo, msg).unwrap()
@@ -930,7 +926,13 @@ mod tests {
     fn given_five_commits_when_requesting_three_then_returns_only_three() {
         let (repo, dir) = temp_repo();
         for i in 0..5 {
-            write_and_commit(&repo, &dir, &format!("{}.txt", i), "x", &format!("commit {}", i));
+            write_and_commit(
+                &repo,
+                &dir,
+                &format!("{}.txt", i),
+                "x",
+                &format!("commit {}", i),
+            );
         }
         let commits = get_commits(&repo, 3).unwrap();
         assert_eq!(commits.len(), 3);
@@ -1154,7 +1156,8 @@ mod tests {
     #[test]
     fn given_an_origin_remote_when_getting_its_url_then_returns_the_url() {
         let (repo, dir) = temp_repo();
-        repo.remote("origin", "https://example.com/repo.git").unwrap();
+        repo.remote("origin", "https://example.com/repo.git")
+            .unwrap();
         let url = get_remote_url(&repo, Some("origin"));
         assert_eq!(url.as_deref(), Some("https://example.com/repo.git"));
         cleanup(&dir);
@@ -1209,19 +1212,34 @@ mod tests {
     fn given_a_linear_history_when_computing_lanes_then_all_commits_share_one_lane() {
         let commits = vec![
             CommitInfo {
-                id: "aaa".into(), id_full: String::new(), message: String::new(),
-                author: String::new(), time: 0, parents: vec!["bbb".into()],
-                branches: vec![], is_head: true,
+                id: "aaa".into(),
+                id_full: String::new(),
+                message: String::new(),
+                author: String::new(),
+                time: 0,
+                parents: vec!["bbb".into()],
+                branches: vec![],
+                is_head: true,
             },
             CommitInfo {
-                id: "bbb".into(), id_full: String::new(), message: String::new(),
-                author: String::new(), time: 0, parents: vec!["ccc".into()],
-                branches: vec![], is_head: false,
+                id: "bbb".into(),
+                id_full: String::new(),
+                message: String::new(),
+                author: String::new(),
+                time: 0,
+                parents: vec!["ccc".into()],
+                branches: vec![],
+                is_head: false,
             },
             CommitInfo {
-                id: "ccc".into(), id_full: String::new(), message: String::new(),
-                author: String::new(), time: 0, parents: vec![],
-                branches: vec![], is_head: false,
+                id: "ccc".into(),
+                id_full: String::new(),
+                message: String::new(),
+                author: String::new(),
+                time: 0,
+                parents: vec![],
+                branches: vec![],
+                is_head: false,
             },
         ];
 
@@ -1237,19 +1255,34 @@ mod tests {
     fn given_a_merge_commit_when_computing_lanes_then_parents_are_on_different_lanes() {
         let commits = vec![
             CommitInfo {
-                id: "mmm".into(), id_full: String::new(), message: String::new(),
-                author: String::new(), time: 0, parents: vec!["aaa".into(), "bbb".into()],
-                branches: vec![], is_head: true,
+                id: "mmm".into(),
+                id_full: String::new(),
+                message: String::new(),
+                author: String::new(),
+                time: 0,
+                parents: vec!["aaa".into(), "bbb".into()],
+                branches: vec![],
+                is_head: true,
             },
             CommitInfo {
-                id: "aaa".into(), id_full: String::new(), message: String::new(),
-                author: String::new(), time: 0, parents: vec![],
-                branches: vec![], is_head: false,
+                id: "aaa".into(),
+                id_full: String::new(),
+                message: String::new(),
+                author: String::new(),
+                time: 0,
+                parents: vec![],
+                branches: vec![],
+                is_head: false,
             },
             CommitInfo {
-                id: "bbb".into(), id_full: String::new(), message: String::new(),
-                author: String::new(), time: 0, parents: vec![],
-                branches: vec![], is_head: false,
+                id: "bbb".into(),
+                id_full: String::new(),
+                message: String::new(),
+                author: String::new(),
+                time: 0,
+                parents: vec![],
+                branches: vec![],
+                is_head: false,
             },
         ];
 
@@ -1273,4 +1306,3 @@ mod tests {
         cleanup(&dir);
     }
 }
-

@@ -77,9 +77,9 @@ pub struct App {
     pub unstaged_selected: usize,
     pub commit_message: String,
     pub diff_text: String,
-    pub diff_scroll: usize,       // scroll offset for diff view
-    pub diff_total_lines: usize,  // total lines in diff
-    pub diff_area: Option<Rect>,  // diff panel area for mouse scroll routing
+    pub diff_scroll: usize,      // scroll offset for diff view
+    pub diff_total_lines: usize, // total lines in diff
+    pub diff_area: Option<Rect>, // diff panel area for mouse scroll routing
 
     // Branches tab
     pub branches: Vec<BranchInfo>,
@@ -241,10 +241,8 @@ impl App {
 
     pub fn refresh_remote_status(&mut self) {
         self.remote_status = git_ops::get_remote_status(&self.repo).unwrap_or_default();
-        self.remote_url = git_ops::get_remote_url(
-            &self.repo,
-            self.remote_status.remote_name.as_deref(),
-        );
+        self.remote_url =
+            git_ops::get_remote_url(&self.repo, self.remote_status.remote_name.as_deref());
     }
 
     /// Update the diff preview based on current selection
@@ -423,20 +421,19 @@ impl App {
     /// Handle mouse scroll in the diff pane
     pub fn handle_scroll(&mut self, col: u16, row: u16, up: bool, diff_area: Option<Rect>) {
         // If scroll is within the diff pane area, scroll the diff
-        if let Some(area) = diff_area {
-            if col >= area.x
-                && col < area.x + area.width
-                && row >= area.y
-                && row < area.y + area.height
-            {
-                let visible = area.height.saturating_sub(2) as usize; // minus borders
-                if up {
-                    self.diff_scroll_up(3);
-                } else {
-                    self.diff_scroll_down(3, visible);
-                }
-                return;
+        if let Some(area) = diff_area
+            && col >= area.x
+            && col < area.x + area.width
+            && row >= area.y
+            && row < area.y + area.height
+        {
+            let visible = area.height.saturating_sub(2) as usize; // minus borders
+            if up {
+                self.diff_scroll_up(3);
+            } else {
+                self.diff_scroll_down(3, visible);
             }
+            return;
         }
 
         // Otherwise scroll the main list

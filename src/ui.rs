@@ -1,6 +1,7 @@
 use crate::app::{App, ClickAction, ClickRegion, FilePane, InputMode, Popup, Tab};
 use crate::git_ops::FileState;
 use ratatui::{
+    Frame,
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
@@ -8,7 +9,6 @@ use ratatui::{
         Block, Borders, Clear, List, ListItem, Paragraph, Scrollbar, ScrollbarOrientation,
         ScrollbarState, Wrap,
     },
-    Frame,
 };
 
 // ── Dark purple/violet theme ───────────────────────────────
@@ -153,9 +153,7 @@ fn styled_block<'a>(title: &str, focused: bool) -> Block<'a> {
         .border_style(Style::default().fg(border_color))
         .title(Span::styled(
             format!(" {} ", title),
-            Style::default()
-                .fg(header_fg)
-                .add_modifier(Modifier::BOLD),
+            Style::default().fg(header_fg).add_modifier(Modifier::BOLD),
         ))
         .style(Style::default().bg(colors::BG_PANEL))
 }
@@ -174,7 +172,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         .constraints([
             Constraint::Length(3), // title bar (1 + padding)
             Constraint::Length(3), // tab bar (1 + padding)
-            Constraint::Min(0),   // content
+            Constraint::Min(0),    // content
             Constraint::Length(1), // status bar
         ])
         .split(f.area());
@@ -201,10 +199,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         Popup::ConfirmPush => {
             let msg = format!(
                 "Push to {}?\n\n  ↑ {} commit(s) ahead\n\n  [Y] Confirm    [N] Cancel",
-                app.remote_status
-                    .remote_name
-                    .as_deref()
-                    .unwrap_or("remote"),
+                app.remote_status.remote_name.as_deref().unwrap_or("remote"),
                 app.remote_status.ahead
             );
             draw_confirm_popup(f, "↑ Push", &msg)
@@ -212,10 +207,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         Popup::ConfirmPull => {
             let msg = format!(
                 "Pull from {}?\n\n  ↓ {} commit(s) behind\n\n  [Y] Confirm    [N] Cancel",
-                app.remote_status
-                    .remote_name
-                    .as_deref()
-                    .unwrap_or("remote"),
+                app.remote_status.remote_name.as_deref().unwrap_or("remote"),
                 app.remote_status.behind
             );
             draw_confirm_popup(f, "↓ Pull", &msg)
@@ -240,9 +232,24 @@ fn draw_title_bar(f: &mut Frame, app: &mut App, area: Rect) {
     let behind = app.remote_status.behind;
 
     let mut left: Vec<Span> = vec![
-        Span::styled(" ⎇ ", Style::default().fg(colors::ACCENT_BRIGHT).add_modifier(Modifier::BOLD)),
-        Span::styled("Git", Style::default().fg(colors::TEXT).add_modifier(Modifier::BOLD)),
-        Span::styled("Lumina", Style::default().fg(colors::ACCENT).add_modifier(Modifier::BOLD)),
+        Span::styled(
+            " ⎇ ",
+            Style::default()
+                .fg(colors::ACCENT_BRIGHT)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            "Git",
+            Style::default()
+                .fg(colors::TEXT)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            "Lumina",
+            Style::default()
+                .fg(colors::ACCENT)
+                .add_modifier(Modifier::BOLD),
+        ),
         Span::styled("  ", Style::default()),
         Span::styled("● ", Style::default().fg(colors::ACCENT_GLOW)),
         Span::styled(branch.as_str(), Style::default().fg(colors::TEXT)),
@@ -250,13 +257,26 @@ fn draw_title_bar(f: &mut Frame, app: &mut App, area: Rect) {
 
     if let Some(ref url) = app.remote_url {
         left.push(Span::styled("  → ", Style::default().fg(colors::TEXT_DIM)));
-        left.push(Span::styled(url.as_str(), Style::default().fg(colors::TEXT_MUTED)));
+        left.push(Span::styled(
+            url.as_str(),
+            Style::default().fg(colors::TEXT_MUTED),
+        ));
     }
 
     let right: Vec<Span> = vec![
-        Span::styled(format!("↑{}", ahead), Style::default().fg(colors::GREEN).add_modifier(Modifier::BOLD)),
+        Span::styled(
+            format!("↑{}", ahead),
+            Style::default()
+                .fg(colors::GREEN)
+                .add_modifier(Modifier::BOLD),
+        ),
         Span::styled(" Push ", Style::default().fg(colors::TEXT_MUTED)),
-        Span::styled(format!("↓{}", behind), Style::default().fg(colors::CYAN).add_modifier(Modifier::BOLD)),
+        Span::styled(
+            format!("↓{}", behind),
+            Style::default()
+                .fg(colors::CYAN)
+                .add_modifier(Modifier::BOLD),
+        ),
         Span::styled(" Pull ", Style::default().fg(colors::TEXT_MUTED)),
         Span::styled("⟳", Style::default().fg(colors::ACCENT)),
         Span::styled(" Fetch ", Style::default().fg(colors::TEXT_MUTED)),
@@ -270,20 +290,13 @@ fn draw_title_bar(f: &mut Frame, app: &mut App, area: Rect) {
     spans.push(Span::raw(" ".repeat(pad)));
     spans.extend(right);
 
-    let bar = Paragraph::new(Line::from(spans))
-        .style(Style::default().bg(colors::BG_TITLE));
+    let bar = Paragraph::new(Line::from(spans)).style(Style::default().bg(colors::BG_TITLE));
     f.render_widget(bar, row);
 
     // Click regions for Push, Pull, Fetch buttons
     let push_x = row.x + row.width.saturating_sub(right_width as u16);
-    app.register_click_region(
-        Rect::new(push_x, row.y, 7, 1),
-        ClickAction::PushButton,
-    );
-    app.register_click_region(
-        Rect::new(push_x + 7, row.y, 7, 1),
-        ClickAction::PullButton,
-    );
+    app.register_click_region(Rect::new(push_x, row.y, 7, 1), ClickAction::PushButton);
+    app.register_click_region(Rect::new(push_x + 7, row.y, 7, 1), ClickAction::PullButton);
     app.register_click_region(
         Rect::new(push_x + 14, row.y, 8, 1),
         ClickAction::FetchButton,
@@ -311,7 +324,10 @@ fn draw_tab_bar(f: &mut Frame, app: &mut App, area: Rect) {
             let base = Style::default()
                 .fg(colors::ACCENT_BRIGHT)
                 .bg(colors::BG_SURFACE);
-            spans.push(Span::styled(format!(" {} ", num), base.add_modifier(Modifier::UNDERLINED), ));
+            spans.push(Span::styled(
+                format!(" {} ", num),
+                base.add_modifier(Modifier::UNDERLINED),
+            ));
             spans.push(Span::styled(
                 format!("{} ", label),
                 base.add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
@@ -329,10 +345,12 @@ fn draw_tab_bar(f: &mut Frame, app: &mut App, area: Rect) {
     let refresh_text = "⟳ Refresh ";
     let pad = (row.width as usize).saturating_sub(used + refresh_text.len());
     spans.push(Span::raw(" ".repeat(pad)));
-    spans.push(Span::styled(refresh_text, Style::default().fg(colors::TEXT_MUTED)));
+    spans.push(Span::styled(
+        refresh_text,
+        Style::default().fg(colors::TEXT_MUTED),
+    ));
 
-    let bar = Paragraph::new(Line::from(spans))
-        .style(Style::default().bg(colors::BG_TAB));
+    let bar = Paragraph::new(Line::from(spans)).style(Style::default().bg(colors::BG_TAB));
     f.render_widget(bar, row);
 
     // Tab click regions
@@ -350,7 +368,12 @@ fn draw_tab_bar(f: &mut Frame, app: &mut App, area: Rect) {
 
     // Refresh click region
     app.register_click_region(
-        Rect::new(row.x + row.width - refresh_text.len() as u16, row.y, refresh_text.len() as u16, 1),
+        Rect::new(
+            row.x + row.width - refresh_text.len() as u16,
+            row.y,
+            refresh_text.len() as u16,
+            1,
+        ),
         ClickAction::RefreshButton,
     );
 }
@@ -372,7 +395,10 @@ fn draw_status_bar(f: &mut Frame, app: &App, area: Rect) {
     let left = if app.status_msg.is_empty() {
         Span::styled(" Ready", Style::default().fg(colors::TEXT_MUTED))
     } else {
-        Span::styled(format!(" {}", app.status_msg), Style::default().fg(colors::ACCENT_BRIGHT))
+        Span::styled(
+            format!(" {}", app.status_msg),
+            Style::default().fg(colors::ACCENT_BRIGHT),
+        )
     };
 
     let right = Span::styled(format!("{} ", hints), Style::default().fg(colors::TEXT_DIM));
@@ -466,8 +492,7 @@ fn draw_commit_list(f: &mut Frame, app: &mut App, area: Rect) {
             } else {
                 connector_spans.push(Span::raw(" "));
             }
-            let curr_active: Option<&[bool]> =
-                lane_info.map(|l| l.active_lanes.as_slice());
+            let curr_active: Option<&[bool]> = lane_info.map(|l| l.active_lanes.as_slice());
             let prev_active: Option<&[bool]> = if i == 0 {
                 None
             } else {
@@ -503,10 +528,7 @@ fn draw_commit_list(f: &mut Frame, app: &mut App, area: Rect) {
             if let Some(info) = lane_info {
                 let my_lane = info.lane.min(max_lanes - 1);
                 let merge_to = info.merge_from.map(|m| m.min(max_lanes - 1));
-                let alias_to = info
-                    .alias_to
-                    .as_ref()
-                    .map(|(c, _)| (*c).min(max_lanes - 1));
+                let alias_to = info.alias_to.as_ref().map(|(c, _)| (*c).min(max_lanes - 1));
                 let join_to = merge_to.or(alias_to);
                 let is_merge = merge_to.is_some();
                 let is_alias = merge_to.is_none() && alias_to.is_some();
@@ -530,53 +552,38 @@ fn draw_commit_list(f: &mut Frame, app: &mut App, area: Rect) {
                         if sel {
                             node_style = node_style.add_modifier(Modifier::BOLD);
                         }
-                        graph_spans.push(Span::styled(
-                            format!("{}{}", glyph, trailing),
-                            node_style,
-                        ));
+                        graph_spans
+                            .push(Span::styled(format!("{}{}", glyph, trailing), node_style));
                     } else if let Some(jt) = join_to {
                         let between_right = jt > my_lane && col > my_lane && col < jt;
                         let between_left = jt < my_lane && col > jt && col < my_lane;
                         if between_right || between_left {
                             // Horizontal segment of the connector
-                            graph_spans.push(Span::styled(
-                                "───",
-                                Style::default().fg(my_color),
-                            ));
+                            graph_spans.push(Span::styled("───", Style::default().fg(my_color)));
                         } else if col == jt {
                             if is_alias {
                                 // FF alias: terminating solid dot in alias colour.
                                 let glyph = if jt > my_lane { "●  " } else { "●──" };
-                                graph_spans.push(Span::styled(
-                                    glyph,
-                                    Style::default().fg(col_color),
-                                ));
+                                graph_spans
+                                    .push(Span::styled(glyph, Style::default().fg(col_color)));
                             } else {
                                 // Real merge: corner turning down into the
                                 // second-parent lane.
                                 let corner = if jt > my_lane { "╮  " } else { "╭──" };
-                                graph_spans.push(Span::styled(
-                                    corner,
-                                    Style::default().fg(my_color),
-                                ));
+                                graph_spans
+                                    .push(Span::styled(corner, Style::default().fg(my_color)));
                             }
                         } else if is_active {
                             // Background lane: keep the column visible with `╎`
                             // so each open branch reads as its own persistent
                             // column even on commit rows that aren't on it.
-                            graph_spans.push(Span::styled(
-                                "╎  ",
-                                Style::default().fg(col_color),
-                            ));
+                            graph_spans.push(Span::styled("╎  ", Style::default().fg(col_color)));
                         } else {
                             graph_spans.push(Span::raw("   "));
                         }
                     } else if is_active {
                         // Background lane: persistent column marker.
-                        graph_spans.push(Span::styled(
-                            "╎  ",
-                            Style::default().fg(col_color),
-                        ));
+                        graph_spans.push(Span::styled("╎  ", Style::default().fg(col_color)));
                     } else {
                         graph_spans.push(Span::raw("   "));
                     }
@@ -612,7 +619,11 @@ fn draw_commit_list(f: &mut Frame, app: &mut App, area: Rect) {
             }
 
             // Commit message — bolder on selection (mockup: fontWeight 500 vs 400)
-            let msg_color = if sel { colors::TEXT } else { colors::TEXT_SECONDARY };
+            let msg_color = if sel {
+                colors::TEXT
+            } else {
+                colors::TEXT_SECONDARY
+            };
             let msg_style = if sel {
                 Style::default().fg(msg_color).add_modifier(Modifier::BOLD)
             } else {
@@ -635,11 +646,8 @@ fn draw_commit_list(f: &mut Frame, app: &mut App, area: Rect) {
             };
 
             // Two-line item: connector row above + dot/info row.
-            ListItem::new(vec![
-                Line::from(connector_spans),
-                Line::from(graph_spans),
-            ])
-            .style(row_style)
+            ListItem::new(vec![Line::from(connector_spans), Line::from(graph_spans)])
+                .style(row_style)
         })
         .collect();
 
@@ -681,7 +689,9 @@ fn draw_commit_detail(f: &mut Frame, app: &App, area: Rect) {
         // Commit
         lines.push(Line::from(Span::styled(
             "COMMIT",
-            Style::default().fg(colors::TEXT_DIM).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(colors::TEXT_DIM)
+                .add_modifier(Modifier::BOLD),
         )));
         lines.push(Line::from(Span::styled(
             format!("  {}", commit.id_full),
@@ -692,7 +702,9 @@ fn draw_commit_detail(f: &mut Frame, app: &App, area: Rect) {
         // Author
         lines.push(Line::from(Span::styled(
             "AUTHOR",
-            Style::default().fg(colors::TEXT_DIM).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(colors::TEXT_DIM)
+                .add_modifier(Modifier::BOLD),
         )));
         lines.push(Line::from(Span::styled(
             format!("  {}", commit.author),
@@ -703,7 +715,9 @@ fn draw_commit_detail(f: &mut Frame, app: &App, area: Rect) {
         // Date
         lines.push(Line::from(Span::styled(
             "DATE",
-            Style::default().fg(colors::TEXT_DIM).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(colors::TEXT_DIM)
+                .add_modifier(Modifier::BOLD),
         )));
         lines.push(Line::from(Span::styled(
             format!("  {} ({})", time_str, rel),
@@ -715,7 +729,9 @@ fn draw_commit_detail(f: &mut Frame, app: &App, area: Rect) {
         if !commit.branches.is_empty() {
             lines.push(Line::from(Span::styled(
                 "BRANCHES",
-                Style::default().fg(colors::TEXT_DIM).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(colors::TEXT_DIM)
+                    .add_modifier(Modifier::BOLD),
             )));
             let badge_spans: Vec<Span> = std::iter::once(Span::raw("  "))
                 .chain(commit.branches.iter().flat_map(|b| {
@@ -726,10 +742,7 @@ fn draw_commit_detail(f: &mut Frame, app: &App, area: Rect) {
                         (colors::GREEN, colors::GREEN_BG)
                     };
                     vec![
-                        Span::styled(
-                            format!(" {} ", b),
-                            Style::default().fg(fg).bg(bg),
-                        ),
+                        Span::styled(format!(" {} ", b), Style::default().fg(fg).bg(bg)),
                         Span::raw(" "),
                     ]
                 }))
@@ -741,14 +754,20 @@ fn draw_commit_detail(f: &mut Frame, app: &App, area: Rect) {
         // Message
         lines.push(Line::from(Span::styled(
             "MESSAGE",
-            Style::default().fg(colors::TEXT_DIM).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(colors::TEXT_DIM)
+                .add_modifier(Modifier::BOLD),
         )));
         lines.push(Line::from(Span::styled(
             format!("  {}", commit.message),
-            Style::default().fg(colors::TEXT).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(colors::TEXT)
+                .add_modifier(Modifier::BOLD),
         )));
 
-        let paragraph = Paragraph::new(lines).block(block).wrap(Wrap { trim: false });
+        let paragraph = Paragraph::new(lines)
+            .block(block)
+            .wrap(Wrap { trim: false });
         f.render_widget(paragraph, area);
     } else {
         let paragraph = Paragraph::new(Span::styled(
@@ -801,6 +820,7 @@ fn draw_files_tab(f: &mut Frame, app: &mut App, area: Rect) {
     draw_diff_view(f, app, main_chunks[1]);
 }
 
+#[allow(clippy::too_many_arguments)]
 fn draw_file_list(
     f: &mut Frame,
     click_regions: &mut Vec<ClickRegion>,
@@ -848,8 +868,16 @@ fn draw_file_list(
         })
         .collect();
 
-    let btn_label = if is_staged { "Unstage All ↑" } else { "Stage All ↓" };
-    let btn_color = if is_staged { colors::YELLOW } else { colors::GREEN };
+    let btn_label = if is_staged {
+        "Unstage All ↑"
+    } else {
+        "Stage All ↓"
+    };
+    let btn_color = if is_staged {
+        colors::YELLOW
+    } else {
+        colors::GREEN
+    };
     let header = format!("{} ({})", title, files.len());
 
     let block = Block::default()
@@ -859,14 +887,16 @@ fn draw_file_list(
         } else {
             colors::BORDER
         }))
-        .title(Line::from(vec![
-            Span::styled(
-                format!(" {} ", header),
-                Style::default()
-                    .fg(if focused { colors::ACCENT_BRIGHT } else { colors::TEXT_MUTED })
-                    .add_modifier(Modifier::BOLD),
-            ),
-        ]))
+        .title(Line::from(vec![Span::styled(
+            format!(" {} ", header),
+            Style::default()
+                .fg(if focused {
+                    colors::ACCENT_BRIGHT
+                } else {
+                    colors::TEXT_MUTED
+                })
+                .add_modifier(Modifier::BOLD),
+        )]))
         .title_bottom(Line::from(Span::styled(
             format!(" {} ", btn_label),
             Style::default().fg(btn_color),
@@ -913,7 +943,11 @@ fn draw_commit_input(f: &mut Frame, app: &mut App, area: Rect) {
         .title(Span::styled(
             " Commit Message ",
             Style::default()
-                .fg(if focused { colors::ACCENT_BRIGHT } else { colors::TEXT_MUTED })
+                .fg(if focused {
+                    colors::ACCENT_BRIGHT
+                } else {
+                    colors::TEXT_MUTED
+                })
                 .add_modifier(Modifier::BOLD),
         ))
         .style(Style::default().bg(colors::BG_PANEL));
@@ -974,9 +1008,21 @@ fn parse_hunk_header(line: &str) -> Option<(usize, usize)> {
     // Parse "@@ -old_start,old_len +new_start,new_len @@"
     let after_at = line.strip_prefix("@@ ")?;
     let parts: Vec<&str> = after_at.splitn(3, ' ').collect();
-    if parts.len() < 2 { return None; }
-    let old_start = parts[0].strip_prefix('-')?.split(',').next()?.parse::<usize>().ok()?;
-    let new_start = parts[1].strip_prefix('+')?.split(',').next()?.parse::<usize>().ok()?;
+    if parts.len() < 2 {
+        return None;
+    }
+    let old_start = parts[0]
+        .strip_prefix('-')?
+        .split(',')
+        .next()?
+        .parse::<usize>()
+        .ok()?;
+    let new_start = parts[1]
+        .strip_prefix('+')?
+        .split(',')
+        .next()?
+        .parse::<usize>()
+        .ok()?;
     Some((old_start, new_start))
 }
 
@@ -1004,10 +1050,7 @@ fn draw_diff_view(f: &mut Frame, app: &mut App, area: Rect) {
                     old_line = o;
                     new_line = n;
                 }
-                Span::styled(
-                    " ··· │ ",
-                    Style::default().fg(colors::TEXT_DIM).bg(bg),
-                )
+                Span::styled(" ··· │ ", Style::default().fg(colors::TEXT_DIM).bg(bg))
             } else if line.starts_with('+') {
                 let s = format!("{:>3} │ ", new_line);
                 new_line += 1;
@@ -1022,10 +1065,7 @@ fn draw_diff_view(f: &mut Frame, app: &mut App, area: Rect) {
                 new_line += 1;
                 Span::styled(s, Style::default().fg(colors::TEXT_DIM).bg(bg))
             } else {
-                Span::styled(
-                    " ".repeat(gutter_width),
-                    Style::default().bg(bg),
-                )
+                Span::styled(" ".repeat(gutter_width), Style::default().bg(bg))
             };
 
             Line::from(vec![
@@ -1124,11 +1164,13 @@ fn draw_branches_tab(f: &mut Frame, app: &mut App, area: Rect) {
             ),
             Span::styled(
                 &branch.name,
-                Style::default().fg(name_color).add_modifier(if branch.is_head {
-                    Modifier::BOLD
-                } else {
-                    Modifier::empty()
-                }),
+                Style::default()
+                    .fg(name_color)
+                    .add_modifier(if branch.is_head {
+                        Modifier::BOLD
+                    } else {
+                        Modifier::empty()
+                    }),
             ),
             Span::styled(
                 format!("  {}", branch.commit_id),
@@ -1189,14 +1231,12 @@ fn draw_branches_tab(f: &mut Frame, app: &mut App, area: Rect) {
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(colors::BORDER_FOCUS))
-        .title(Line::from(vec![
-            Span::styled(
-                format!(" {} ", title),
-                Style::default()
-                    .fg(colors::ACCENT_BRIGHT)
-                    .add_modifier(Modifier::BOLD),
-            ),
-        ]))
+        .title(Line::from(vec![Span::styled(
+            format!(" {} ", title),
+            Style::default()
+                .fg(colors::ACCENT_BRIGHT)
+                .add_modifier(Modifier::BOLD),
+        )]))
         .title_bottom(Line::from(Span::styled(
             " Enter: checkout │ n: new │ d: delete ",
             Style::default().fg(colors::TEXT_DIM),
@@ -1210,8 +1250,12 @@ fn draw_branches_tab(f: &mut Frame, app: &mut App, area: Rect) {
 
     // Click regions mapped through row_to_branch
     let inner = inner_rect(branch_area);
-    for i in 0..row_to_branch.len().min(inner.height as usize) {
-        if let Some(branch_idx) = row_to_branch[i] {
+    for (i, slot) in row_to_branch
+        .iter()
+        .enumerate()
+        .take(inner.height as usize)
+    {
+        if let Some(branch_idx) = *slot {
             let row = Rect::new(inner.x, inner.y + i as u16, inner.width, 1);
             app.register_click_region(row, ClickAction::SelectBranch(branch_idx));
         }
@@ -1236,7 +1280,10 @@ fn draw_input_popup(f: &mut Frame, title: &str, prompt: &str, input: &str) {
         .style(Style::default().bg(colors::BG_SURFACE));
 
     let lines = vec![
-        Line::from(Span::styled(prompt, Style::default().fg(colors::TEXT_SECONDARY))),
+        Line::from(Span::styled(
+            prompt,
+            Style::default().fg(colors::TEXT_SECONDARY),
+        )),
         Line::raw(""),
         Line::from(vec![
             Span::styled("  > ", Style::default().fg(colors::ACCENT)),
@@ -1320,10 +1367,7 @@ fn draw_help_popup(f: &mut Frame) {
     let mut lines: Vec<Line> = Vec::new();
     for (key, desc) in &shortcuts {
         lines.push(Line::from(vec![
-            Span::styled(
-                format!("  {:14}", key),
-                Style::default().fg(colors::ACCENT),
-            ),
+            Span::styled(format!("  {:14}", key), Style::default().fg(colors::ACCENT)),
             Span::styled(*desc, Style::default().fg(colors::TEXT_SECONDARY)),
         ]));
     }

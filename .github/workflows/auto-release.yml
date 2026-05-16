@@ -1,0 +1,280 @@
+name: Auto Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+  pull-requests: write
+  packages: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # =============================================
+  # Job 1: Verify CI passed on this commit
+  # =============================================
+  ci-gate:
+    name: Verify CI passed
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Wait for CI to pass
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          SHA=$(git rev-parse HEAD)
+          echo "Waiting for CI on commit: $SHA"
+
+          RUN_ID=$(gh run list \
+            --repo ${{ github.repository }} \
+            --workflow ci.yml \
+            --commit $SHA \
+            --json databaseId \
+            --jq '.[0].databaseId // empty')
+
+          if [ -z "$RUN_ID" ]; then
+            echo "::error::No CI run found for this commit. Push to a branch first."
+            exit 1
+          fi
+
+          gh run watch "$RUN_ID" --repo ${{ github.repository }} --exit-status
+
+  # =============================================
+  # Job 2: Build binaries for all platforms
+  # =============================================
+  build:
+    name: Build (${{ matrix.target }})
+    needs: ci-gate
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            artifact: git-lumina-linux-x86_64
+          - os: ubuntu-latest
+            target: aarch64-unknown-linux-gnu
+            artifact: git-lumina-linux-aarch64
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            artifact: git-lumina-windows-x86_64
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            artifact: git-lumina-macos-x86_64
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            artifact: git-lumina-macos-aarch64
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install Linux build deps
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pkg-config libssl-dev zlib1g-dev libssh2-1-dev
+          if [ "${{ matrix.target }}" = "aarch64-unknown-linux-gnu" ]; then
+            sudo apt-get install -y gcc-aarch64-linux-gnu
+            echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc" >> $GITHUB_ENV
+          fi
+
+      - name: Build
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Package (Unix)
+        if: runner.os != 'Windows'
+        run: |
+          cd target/${{ matrix.target }}/release
+          tar czf ../../../${{ matrix.artifact }}.tar.gz gitlumina lumina
+          cd ../../..
+
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          cd target/${{ matrix.target }}/release
+          7z a ../../../${{ matrix.artifact }}.zip gitlumina.exe lumina.exe
+          cd ../../..
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: |
+            ${{ matrix.artifact }}.tar.gz
+            ${{ matrix.artifact }}.zip
+
+  # =============================================
+  # Job 3: Build & Push Docker image
+  # =============================================
+  docker:
+    name: Docker (Docker Hub + GHCR)
+    needs: ci-gate
+    runs-on: ubuntu-latest
+    environment: Docker
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Extract version from tag
+        id: version
+        run: echo "version=${GITHUB_REF_NAME#v}" >> $GITHUB_OUTPUT
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            ${{ secrets.DOCKERHUB_USERNAME }}/git-lumina:latest
+            ${{ secrets.DOCKERHUB_USERNAME }}/git-lumina:${{ steps.version.outputs.version }}
+            ghcr.io/${{ github.repository_owner }}/git-lumina:latest
+            ghcr.io/${{ github.repository_owner }}/git-lumina:${{ steps.version.outputs.version }}
+          cache-from: type=registry,ref=ghcr.io/${{ github.repository_owner }}/git-lumina:cache
+          cache-to: type=registry,ref=ghcr.io/${{ github.repository_owner }}/git-lumina:cache,mode=max
+
+  # =============================================
+  # Job 4: Publish to crates.io (only after CI passes)
+  # =============================================
+  publish:
+    name: Publish to crates.io
+    needs: [build]
+    runs-on: ubuntu-latest
+    environment: RUST 
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Publish
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: cargo publish --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
+
+  # =============================================
+  # Job 5: Create GitHub Release with binaries
+  # =============================================
+  release:
+    name: Create Release
+    needs: [build]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+          pattern: git-lumina-*
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: "Release ${{ github.ref_name }}"
+          generate_release_notes: true
+          files: |
+            artifacts/*
+
+  # =============================================
+  # Job 6: Version bump + CHANGELOG update via PR
+  # =============================================
+  post-release:
+    name: Post-Release Updates
+    needs: release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Extract version from tag
+        id: version
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "Extracted version: $VERSION"
+
+      - name: Update version in Cargo.toml
+        run: |
+          sed -i "s/^version = \".*\"/version = \"${{ steps.version.outputs.version }}\"/" Cargo.toml
+          echo "Updated Cargo.toml to version ${{ steps.version.outputs.version }}"
+          grep "^version" Cargo.toml
+
+      - name: Update CHANGELOG.md
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          RELEASE_DATE=$(date +'%Y-%m-%d')
+
+          RELEASE_BODY=$(gh release view ${{ github.ref_name }} --json body --jq '.body')
+
+          NEW_ENTRY="## [${{ steps.version.outputs.version }}] - $RELEASE_DATE
+
+          $RELEASE_BODY
+          "
+
+          if [ -f CHANGELOG.md ]; then
+            awk -v new="$NEW_ENTRY" '
+              BEGIN { inserted=0 }
+              /^# Changelog/ { print; next }
+              /^All notable changes/ { print; print ""; print new; inserted=1; next }
+              { print }
+            ' CHANGELOG.md > CHANGELOG.tmp
+            mv CHANGELOG.tmp CHANGELOG.md
+          else
+            echo "# Changelog" > CHANGELOG.md
+            echo "" >> CHANGELOG.md
+            echo "All notable changes to this project will be documented in this file." >> CHANGELOG.md
+            echo "" >> CHANGELOG.md
+            echo "$NEW_ENTRY" >> CHANGELOG.md
+          fi
+
+      - name: Create Pull Request
+        uses: peter-evans/create-pull-request@v5
+        with:
+          commit-message: ":bookmark: chore: bump version to ${{ steps.version.outputs.version }} + update CHANGELOG"
+          title: "Bump version to ${{ steps.version.outputs.version }}"
+          branch: post-release-${{ github.ref_name }}
+          base: main
+          delete-branch: true
+          body: |
+            Automated post-release updates for ${{ github.ref_name }}:
+
+            - Updated `version` in `Cargo.toml` to `${{ steps.version.outputs.version }}`
+            - Updated `CHANGELOG.md` with release notes
+
+            This PR was automatically created by the release workflow.
