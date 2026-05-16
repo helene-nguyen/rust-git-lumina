@@ -172,9 +172,9 @@ impl App {
     pub fn toggle_mouse_capture(&mut self) {
         self.mouse_capture = !self.mouse_capture;
         self.status_msg = if self.mouse_capture {
-            "Mouse capture ON — clicks routed to UI".to_string()
+            "Mouse capture OFF — clicks routed to UI".to_string()
         } else {
-            "Mouse capture OFF — drag to select/copy text".to_string()
+            "Mouse capture ON — drag to select/copy text".to_string()
         };
     }
 
