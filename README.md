@@ -28,6 +28,75 @@ This installs both `lumina` and `gitlumina` commands globally. Then navigate to 
 lumina
 ```
 
+## Run via Docker
+
+A pre-built image is also available. With Docker you can run GitLumina without installing Rust, `libgit2`, or any system dependencies.
+
+### 1. Pull the image
+
+```bash
+# GitHub Container Registry
+docker pull ghcr.io/helene-nguyen/git-lumina:latest
+
+# or Docker Hub (replace with your account if you publish your own)
+docker pull <dockerhub-username>/git-lumina:latest
+```
+
+Use a version tag (e.g. `1.0.0`) instead of `latest` to pin to a specific release.
+
+### 2. Run it against a repo — and why you need `-v`
+
+Docker containers are **isolated from the host filesystem**. The container has its own `/` and **cannot see your current directory** unless you explicitly grant access. GitLumina expects a Git repository at `/repo` inside the container, so you bind-mount your host repo to that path with the `-v` flag.
+
+From inside the Git repo you want to inspect:
+
+```bash
+docker run --rm -it -v "$(pwd):/repo" ghcr.io/helene-nguyen/git-lumina:latest
+```
+
+What each flag does:
+
+| Flag                | Purpose                                                                |
+| ------------------- | ---------------------------------------------------------------------- |
+| `--rm`              | Remove the container when it exits (no clutter)                        |
+| `-it`               | Attach an interactive TTY — the TUI needs this                          |
+| `-v "$(pwd):/repo"` | Mount the host's current directory at `/repo` inside the container     |
+
+Without `-v`, the container sees an empty `/repo` and fails with `Failed to find a Git repository`. That is by design — there is no Dockerfile trick that bypasses it.
+
+### 3. Shell-specific notes (Windows)
+
+**PowerShell:**
+
+```powershell
+docker run --rm -it -v "${PWD}:/repo" ghcr.io/helene-nguyen/git-lumina:latest
+```
+
+**WSL (Ubuntu / Debian inside Windows):** works with the standard Linux command above. Open your WSL shell first — do **not** run Docker commands from Git Bash.
+
+**Git Bash on Windows:** *not recommended*. MSYS rewrites Unix-style paths (`/repo` becomes `C:\Program Files\Git\repo`) and breaks the `-v` argument. Use WSL or PowerShell instead.
+
+### 4. Make it ergonomic — set an alias once
+
+Typing the full command every time is tedious. Set an alias once:
+
+```bash
+# Linux / macOS / WSL — add to ~/.bashrc or ~/.zshrc
+alias lumina='docker run --rm -it -v "$(pwd):/repo" ghcr.io/helene-nguyen/git-lumina:latest'
+```
+
+```powershell
+# Windows — add to $PROFILE
+function lumina { docker run --rm -it -v "${PWD}:/repo" ghcr.io/helene-nguyen/git-lumina:latest @args }
+```
+
+Then from any repo:
+
+```bash
+cd path/to/your/repo
+lumina
+```
+
 ## Prerequisites
 
 - [Rust toolchain](https://rustup.rs/) (1.85+)
