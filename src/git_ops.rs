@@ -854,9 +854,13 @@ mod tests {
             std::env::temp_dir().join(format!("git_lumina_test_{}_{}", std::process::id(), id));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
-        let repo = Repository::init(&dir).unwrap();
 
-        // Configure a user so commits work
+        // Pin the initial branch to "main" so tests don't depend on the
+        // host's `init.defaultBranch` setting (CI runners often default to "master").
+        let mut opts = git2::RepositoryInitOptions::new();
+        opts.initial_head("main");
+        let repo = Repository::init_opts(&dir, &opts).unwrap();
+
         let mut config = repo.config().unwrap();
         config.set_str("user.name", "Test User").unwrap();
         config.set_str("user.email", "test@example.com").unwrap();
