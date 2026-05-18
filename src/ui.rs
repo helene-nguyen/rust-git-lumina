@@ -1286,11 +1286,7 @@ fn draw_branches_tab(f: &mut Frame, app: &mut App, area: Rect) {
 
     // Click regions mapped through row_to_branch
     let inner = inner_rect(branch_area);
-    for (i, slot) in row_to_branch
-        .iter()
-        .enumerate()
-        .take(inner.height as usize)
-    {
+    for (i, slot) in row_to_branch.iter().enumerate().take(inner.height as usize) {
         if let Some(branch_idx) = *slot {
             let row = Rect::new(inner.x, inner.y + i as u16, inner.width, 1);
             app.register_click_region(row, ClickAction::SelectBranch(branch_idx));
