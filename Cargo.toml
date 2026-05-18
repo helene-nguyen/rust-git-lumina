@@ -11,6 +11,6 @@ repository = "https://github.com/helene-nguyen/rust-git-lumina.git"
 [dependencies]
 ratatui = "0.28"
 crossterm = "0.28"
-git2 = "0.19"
+git2 = { version = "0.19", features = ["vendored-openssl", "vendored-libgit2"] }
 anyhow = "1.0"
 chrono = "0.4"
