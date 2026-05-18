@@ -180,10 +180,8 @@ fn handle_files_input(app: &mut App, key: KeyCode) {
 
         KeyCode::Char('c') => app.start_commit_input(),
 
-        KeyCode::Enter => {
-            if app.file_pane == FilePane::CommitMsg {
-                app.do_commit();
-            }
+        KeyCode::Enter if app.file_pane == FilePane::CommitMsg => {
+            app.do_commit();
         }
 
         _ => {}

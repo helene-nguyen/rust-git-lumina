@@ -1117,11 +1117,7 @@ fn draw_diff_view(f: &mut Frame, app: &mut App, area: Rect) {
     let scroll = app.diff_scroll.min(max_scroll);
 
     let scroll_info = if total > visible {
-        let pct = if max_scroll > 0 {
-            (scroll * 100) / max_scroll
-        } else {
-            0
-        };
+        let pct = (scroll * 100).checked_div(max_scroll).unwrap_or(0);
         format!(" [{}/{}  {}%]", scroll + 1, total, pct)
     } else {
         String::new()
